@@ -1,0 +1,18 @@
+.a4p-desc {
+	color: var(--text-muted);
+	line-height: 1.7;
+}
+
+.a4p-dashboard {
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	padding: 4px 14px;
+	margin: 12px 0 20px;
+	background: var(--background-secondary);
+}
+
+.a4p-loading {
+	color: var(--text-faint);
+	text-align: center;
+	padding: 10px 0;
+}
