@@ -1,13 +1,17 @@
 {
   "name": "a4p-omnisearch",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "A4P Omnisearch Helper — pastor-friendly setup companion for browser-side vault search",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
   },
-  "keywords": ["obsidian", "omnisearch", "plugin"],
+  "keywords": [
+    "obsidian",
+    "omnisearch",
+    "plugin"
+  ],
   "author": "abadcsh",
   "license": "MIT",
   "devDependencies": {

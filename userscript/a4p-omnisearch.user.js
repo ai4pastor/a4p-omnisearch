@@ -6,8 +6,8 @@
 // @updateURL    https://raw.githubusercontent.com/abadcsh-tech/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/abadcsh-tech/a4p-omnisearch/issues
-// @version      1.1.0
-// @description  구글·네이버 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단. Omnisearch HTTP + Local REST API 기반.
+// @version      1.2.5
+// @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
 // @contributor  Simon Cambier (original "Obsidian Omnisearch in Google" — https://github.com/scambier/userscripts)
@@ -19,6 +19,9 @@
 // @include      https://www.google.*/*
 // @include      https://google.*/*
 // @match        https://search.naver.com/*
+// @match        https://www.bing.com/*
+// @match        https://bing.com/*
+// @match        https://www.youtube.com/*
 // @icon         https://obsidian.md/favicon.ico
 // @require      https://code.jquery.com/jquery-3.7.1.min.js
 // @require      https://raw.githubusercontent.com/sizzlemctwizzle/GM_config/master/gm_config.js
@@ -36,15 +39,24 @@
     "use strict";
 
     const ID = "OmnisearchObsidianResults";
+    const VERSION = "1.2.5";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
     // ---------- 검색엔진 어댑터 ----------
     // 각 엔진: 쿼리 파라미터 이름 + 결과 사이드바 셀렉터 + 사이드바가 없을 때의 폴백 부모.
+    // sidebar:null = 항상 우측 플로팅 패널 사용 (유튜브처럼 사이드바가 없는 사이트).
     const ENGINES = {
-        google: { key: "google", param: "q",     sidebar: "#rhs",      fallbackParent: "#rcnt" },
-        naver:  { key: "naver",  param: "query", sidebar: "#sub_pack", fallbackParent: "#container" },
+        google:  { key: "google",  param: "q",            sidebar: "#rhs",       fallbackParent: "#rcnt" },
+        naver:   { key: "naver",   param: "query",        sidebar: "#sub_pack",  fallbackParent: "#container" },
+        bing:    { key: "bing",    param: "q",            sidebar: "#b_context", fallbackParent: "#b_content" },
+        youtube: { key: "youtube", param: "search_query", sidebar: null,         fallbackParent: null },
     };
-    const ENGINE = /(^|\.)search\.naver\.com$/.test(location.hostname) ? ENGINES.naver : ENGINES.google;
+    const HOST = location.hostname;
+    const ENGINE =
+        /(^|\.)search\.naver\.com$/.test(HOST) ? ENGINES.naver
+        : /(^|\.)bing\.com$/.test(HOST)        ? ENGINES.bing
+        : /(^|\.)youtube\.com$/.test(HOST)     ? ENGINES.youtube
+        : ENGINES.google;
     let sidebarSelector = ENGINE.sidebar; // 부팅 시 폴백/플로팅 패널로 재지정될 수 있음
 
     // ---------- persisted live state ----------
@@ -64,6 +76,7 @@
         type: "all",       // all | md | pdf | img
         cat: "all",        // 목회 카테고리: all | sermon | frag | devo | bible | comm
         refine: "",        // overrides the URL query when set
+        mode: "auto",      // 화면 모드: auto(OS 따라감) | light | dark — 헤더 ◐ 버튼으로 순환
         expanded: new Set(),
         vaultsSeen: 0,
         bibleRef: null,    // parseBibleRef() 결과 (성경구절 고정 카드용)
@@ -91,10 +104,13 @@
         let s = String(raw ?? "").replace(/<br\s*\/?>/gi, " ");
         if (S.cleanFrontmatter) {
             s = s
-                .replace(/\b(type|aliases|author|description|date created|date modified|tags|CMDS|index|status|cssclasses|publish|created|modified|up|related|source|source-vault|cover|banner)\s*:/gi, " ")
+                .replace(/&quot;|&#0?39;/g, " ")                   // escaped quotes from the API
+                .replace(/\b(type|aliases|author|description|date created|date modified|tags|CMDS|index|status|cssclasses|publish|created|modified|up|related|related notes|linked idea|source|source-vault|cover|banner|word_code|doctrine|route|world|outcome|성경구절|요약)\s*:/gi, " ")
                 .replace(/!?\[\[[^\]]*\]\]/g, " ")                 // wikilinks / embeds
                 .replace(/\b\d{4}-\d{2}-\d{2}(?:T[\d:]+)?\b/g, " ") // ISO dates / timestamps
-                .replace(/["'`]/g, " ")                            // stray quotes/backticks
+                .replace(/["'`“”‘’]/g, " ")    // stray quotes/backticks (curly 포함)
+                .replace(/(^|\s)#{1,6}\s+/g, " ")                  // markdown 헤딩 마커
+                .replace(/(^|\s)[-—]{2,}(\s|$)/g, " ")             // 구분선 잔여물
                 .replace(/(^|\s)-\s+/g, " ");                      // list markers
         }
         return s.replace(/\s{2,}/g, " ").trim();
@@ -565,160 +581,187 @@
     }
 
     // ---------- styles ----------
+    // A2 "잉크 · 에디토리얼" 디자인: 그림자·색 상자를 걷어내고 헤어라인과 타이포그래피 위계로 구성.
+    // 색은 전부 토큰(--변수)으로만 참조 → 라이트/다크는 토큰 블록 교체만으로 전환된다.
+    // 다크 적용 경로 3가지: OS 자동(prefers-color-scheme) / 수동 강제(.om-dark) / 수동 라이트(.om-light).
+    const LIGHT_TOKENS = `
+        --accent:#134538; --accent-rgb:19,69,56; --on-accent:#FBFAF7;
+        --text:#1C1B18; --muted:#6E6B61; --faint:#A5A196;
+        --line:#E8E5DC; --chipline:#DDDAD0; --wash:#F2F1EC;
+        --card:#FFFFFF; --card-hover:#FAF9F5; --panel:#FBFAF7;
+        --sel:rgba(var(--accent-rgb),0.07);
+    `;
+    const DARK_TOKENS = `
+        --accent:#6FB394; --accent-rgb:111,179,148; --on-accent:#111814;
+        --text:#E6E4DE; --muted:#A9A69C; --faint:#7E7B72;
+        --line:#3B3E42; --chipline:#45484D; --wash:rgba(255,255,255,0.055);
+        --card:#2A2D31; --card-hover:#33373C; --panel:#222528;
+        --sel:rgba(var(--accent-rgb),0.13);
+    `;
+    // 테마 프리셋: [라이트 accent, 라이트 rgb, 다크 accent, 다크 rgb]. A4P(브랜드 그린)가 기본.
+    const THEMES = {
+        a4p:      ["#134538", "19,69,56",   "#6FB394", "111,179,148"],
+        obsidian: ["#1B0CAB", "27,12,171",  "#B79BFF", "183,155,255"],
+        mono:     ["#3C4043", "60,64,67",   "#CFD3D7", "207,211,215"],
+        ocean:    ["#0369A1", "3,105,161",  "#38BDF8", "56,189,248"],
+        forest:   ["#15803D", "21,128,61",  "#4ADE80", "74,222,128"],
+        sunset:   ["#C2410C", "194,65,12",  "#FB923C", "251,146,60"],
+        rose:     ["#BE123C", "190,18,60",  "#FB7185", "251,113,133"],
+        grape:    ["#7C3AED", "124,58,237", "#C084FC", "192,132,252"],
+        slate:    ["#475569", "71,85,105",  "#94A3B8", "148,163,184"],
+    };
+    const themeCssLight = Object.entries(THEMES).map(([k, t]) =>
+        `#${ID}.theme-${k} { --accent:${t[0]}; --accent-rgb:${t[1]}; }`).join("\n");
+    const themeCssDark = (sel) => Object.entries(THEMES).map(([k, t]) =>
+        `${sel}.theme-${k} { --accent:${t[2]}; --accent-rgb:${t[3]}; }`).join("\n");
+
     const injectStyles = () => {
         const style = document.createElement("style");
         style.textContent = `
             #${ID} {
-                --accent:#134538; --accent-rgb:19,69,56; --tint:#E9F0ED;
-                --card:#ffffff; --card-hover:#ffffff; --text:#202124;
-                --muted:#5f6368; --faint:#9aa0a6; --sel:rgba(19,69,56,0.08);
-                --hdr:#44474c; --hdr-rgb:68,71,76; /* header text: neutral gray (toned-down) */
+                ${LIGHT_TOKENS}
                 margin:20px 0; width:100%; min-width:360px; box-sizing:border-box;
-                font-family:Roboto, Arial, sans-serif;
+                font-family:"SUIT","SUIT Variable","Pretendard","Apple SD Gothic Neo","Malgun Gothic",Roboto,Arial,sans-serif;
+                color:var(--text);
+                /* 종이 패널 서피스 — 어느 페이지 배경 위에서도 위젯이 자기 지면을 갖는다 */
+                background:var(--panel); border:1px solid var(--line); border-radius:14px;
+                padding:14px 16px 10px;
             }
-            /* ---- Theme presets (light values; dark overrides below) ---- */
-            #${ID}.theme-obsidian { --accent:#1B0CAB; --accent-rgb:27,12,171; --tint:#F2F6FF; --sel:rgba(27,12,171,0.08); }
-            #${ID}.theme-mono     { --accent:#3c4043; --accent-rgb:60,64,67;  --tint:#f1f3f4; --sel:rgba(60,64,67,0.08); }
-            #${ID}.theme-ocean    { --accent:#0369a1; --accent-rgb:3,105,161;  --tint:#e8f1f7; --sel:rgba(3,105,161,0.08); }
-            #${ID}.theme-forest   { --accent:#15803d; --accent-rgb:21,128,61;  --tint:#e9f3ec; --sel:rgba(21,128,61,0.08); }
-            #${ID}.theme-sunset   { --accent:#c2410c; --accent-rgb:194,65,12;  --tint:#fbeee7; --sel:rgba(194,65,12,0.08); }
-            #${ID}.theme-rose     { --accent:#be123c; --accent-rgb:190,18,60;  --tint:#fbe9ed; --sel:rgba(190,18,60,0.08); }
-            #${ID}.theme-grape    { --accent:#7c3aed; --accent-rgb:124,58,237; --tint:#f1ebfb; --sel:rgba(124,58,237,0.08); }
-            #${ID}.theme-slate    { --accent:#475569; --accent-rgb:71,85,105;  --tint:#eef1f5; --sel:rgba(71,85,105,0.08); }
+            ${themeCssLight}
             @media (prefers-color-scheme: dark) {
-                #${ID} {
-                    --accent:#E985A2; --accent-rgb:233,133,162; --tint:#2C303D;
-                    --card:#353a48; --card-hover:#3d4250; --text:#e8eaed;
-                    --muted:#bdc1c6; --faint:#8b9099; --sel:rgba(233,133,162,0.14);
-                    --hdr:#cbd0d8; --hdr-rgb:203,208,216; /* toned-down white */
-                }
-                #${ID}.theme-obsidian { --accent:#b79bff; --accent-rgb:183,155,255; --tint:#2C303D; }
-                #${ID}.theme-mono     { --accent:#cfd3d7; --accent-rgb:207,211,215; --tint:#2C303D; }
-                #${ID}.theme-ocean    { --accent:#38bdf8; --accent-rgb:56,189,248;  --tint:#2C303D; }
-                #${ID}.theme-forest   { --accent:#4ade80; --accent-rgb:74,222,128;  --tint:#2C303D; }
-                #${ID}.theme-sunset   { --accent:#fb923c; --accent-rgb:251,146,60;  --tint:#2C303D; }
-                #${ID}.theme-rose     { --accent:#fb7185; --accent-rgb:251,113,133; --tint:#2C303D; }
-                #${ID}.theme-grape    { --accent:#c084fc; --accent-rgb:192,132,252; --tint:#2C303D; }
-                #${ID}.theme-slate    { --accent:#94a3b8; --accent-rgb:148,163,184; --tint:#2C303D; }
+                #${ID}:not(.om-light) { ${DARK_TOKENS} }
+                ${themeCssDark(`#${ID}:not(.om-light)`)}
             }
+            #${ID}.om-dark { ${DARK_TOKENS} }
+            ${themeCssDark(`#${ID}.om-dark`)}
 
-            /* Header — neutral toned-down text/icons; only the logo mark keeps the accent color */
+            /* 헤더 — 상자 없이 헤어라인 아래 브랜드 행 (한 줄 고정) */
             #${ID} .om-header {
-                background:var(--tint); color:var(--hdr);
-                padding:12px 16px; border-radius:16px 16px 0 0;
-                display:flex; align-items:center; gap:8px;
+                display:flex; align-items:center; gap:7px;
+                padding:4px 2px 11px; border-bottom:1px solid var(--line);
             }
-            #${ID} .om-h-title { display:flex; align-items:center; gap:8px; font-size:15px; font-weight:600; color:var(--hdr); }
-            #${ID} .om-header svg { width:18px; height:18px; }
+            #${ID} .om-h-title {
+                display:flex; align-items:center; gap:6px; font-size:14px; font-weight:800;
+                letter-spacing:-0.01em; color:var(--text);
+                white-space:nowrap; flex-shrink:0; /* 제목은 절대 줄바꿈하지 않는다 */
+            }
+            #${ID} .om-header svg { width:17px; height:17px; }
             #${ID} .om-h-title svg .purple { fill:var(--accent); }
             #${ID} .om-count {
-                font-size:12px; font-weight:600; background:rgba(var(--hdr-rgb),0.14);
-                color:var(--hdr); padding:1px 8px; border-radius:999px;
+                font-size:10.5px; font-weight:700; color:var(--accent); flex-shrink:0;
+                background:rgba(var(--accent-rgb),0.10); padding:2px 8px; border-radius:999px;
+                font-variant-numeric:tabular-nums; white-space:nowrap; cursor:default;
             }
-            #${ID} .om-h-actions { margin-left:auto; display:flex; align-items:center; gap:4px; }
+            #${ID} .om-h-actions { margin-left:auto; display:flex; align-items:center; gap:1px; }
             #${ID} .om-icon-btn {
-                background:transparent; border:none; cursor:pointer; color:var(--hdr);
-                opacity:0.55; padding:4px; border-radius:6px; font-size:13px; line-height:1;
-                display:inline-flex; align-items:center; transition:opacity .15s, background .15s;
+                background:transparent; border:none; cursor:pointer; color:var(--muted);
+                opacity:0.85; padding:4px; border-radius:7px; line-height:0;
+                display:inline-flex; align-items:center; justify-content:center;
+                transition:opacity .15s, background .15s, color .15s;
             }
-            #${ID} .om-icon-btn:hover { opacity:1; background:rgba(var(--hdr-rgb),0.12); }
-            #${ID} .om-icon-btn.active { opacity:1; background:rgba(var(--hdr-rgb),0.18); }
+            #${ID} .om-icon-btn svg { width:15px; height:15px; display:block; }
+            #${ID} .om-icon-btn:hover { opacity:1; color:var(--text); background:var(--wash); }
+            #${ID} .om-icon-btn.active { opacity:1; color:var(--accent); background:rgba(var(--accent-rgb),0.10); }
+            #${ID} .om-setup-code { color:var(--accent); }  /* 온보딩 핵심 버튼은 브랜드색으로 강조 */
+            #${ID} .om-collapse svg { transition:transform .15s ease; }
+            #${ID}.collapsed .om-collapse svg { transform:rotate(-90deg); }
 
-            /* Body */
-            #${ID} .om-body {
-                background:var(--tint); border-radius:0 0 16px 16px;
-                padding:8px; box-shadow:0 4px 14px rgba(0,0,0,0.07);
+            /* 즉시 뜨는 자체 툴팁 — 브라우저 기본 title보다 빠르고 잘 보인다 */
+            #${ID} [data-tip] { position:relative; }
+            #${ID} [data-tip]::after {
+                content:attr(data-tip); position:absolute; top:calc(100% + 7px); right:0;
+                background:var(--text); color:var(--panel);
+                font-size:11px; font-weight:600; line-height:1.4; padding:4px 9px; border-radius:6px;
+                white-space:nowrap; pointer-events:none; opacity:0; transform:translateY(-2px);
+                transition:opacity .12s ease .2s, transform .12s ease .2s; z-index:10;
             }
+            #${ID} [data-tip]:hover::after { opacity:1; transform:translateY(0); }
+
+            /* 본문 — 상자 없이 페이지에 그대로 조판 */
+            #${ID} .om-body { padding:2px 0 0; }
             #${ID}.collapsed .om-body { display:none; }
-            #${ID}.collapsed .om-header { border-radius:16px; }
 
-            /* Controls */
-            #${ID} .om-controls { display:none; flex-direction:column; gap:8px; padding:4px 4px 10px; }
+            /* 컨트롤 */
+            #${ID} .om-controls { display:none; flex-direction:column; gap:8px; padding:10px 2px 4px; }
             #${ID} .om-controls.open { display:flex; }
             #${ID} .om-refine {
-                width:100%; box-sizing:border-box; border:1px solid rgba(var(--accent-rgb),0.25);
+                width:100%; box-sizing:border-box; border:1px solid var(--chipline);
                 background:var(--card); color:var(--text); border-radius:8px;
                 padding:7px 10px; font-size:13px; outline:none;
             }
+            #${ID} .om-refine::placeholder { color:var(--faint); }
             #${ID} .om-refine:focus { border-color:var(--accent); }
             #${ID} .om-ctl-row { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-            #${ID} .om-seg { display:inline-flex; border:1px solid rgba(var(--accent-rgb),0.25); border-radius:8px; overflow:hidden; }
+            #${ID} .om-seg { display:inline-flex; border:1px solid var(--chipline); border-radius:8px; overflow:hidden; }
             #${ID} .om-seg button {
                 background:var(--card); color:var(--muted); border:none; cursor:pointer;
                 padding:5px 9px; font-size:12px; line-height:1;
             }
-            #${ID} .om-seg button.active { background:var(--accent); color:#fff; }
-            @media (prefers-color-scheme: dark) { #${ID} .om-seg button.active { color:#1B1B1B; } }
+            #${ID} .om-seg button.active { background:var(--accent); color:var(--on-accent); }
             #${ID} .om-slider { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); }
             #${ID} .om-slider input[type=range] { width:96px; accent-color:var(--accent); }
 
-            /* List + cards */
-            #${ID} .om-list { display:flex; flex-direction:column; gap:8px; }
+            /* 결과 목록 — 헤어라인으로 나뉜 에디토리얼 행 (기본 스킨 = Editorial) */
+            #${ID} .om-list { display:flex; flex-direction:column; gap:0; }
             #${ID} .om-result {
-                position:relative; border-radius:10px; padding:12px 14px;
-                border:1px solid transparent; border-left:3px solid var(--vc, transparent);
-                background:color-mix(in srgb, var(--card) 88%, var(--vc, var(--card)) 12%);
-                transition:transform .16s ease, box-shadow .16s ease, background .16s ease, border-color .16s;
+                position:relative; padding:13px 2px;
+                border-bottom:1px solid var(--line);
+                transition:background .15s ease;
             }
-            #${ID} .om-result:hover {
-                transform:translateY(-1px); box-shadow:0 4px 14px rgba(var(--accent-rgb),0.14);
-                background:color-mix(in srgb, var(--card-hover) 82%, var(--vc, var(--card-hover)) 18%);
-            }
-            #${ID} .om-result.selected { border-color:var(--vc, var(--accent)); background:color-mix(in srgb, var(--vc, var(--accent)) 10%, transparent); }
+            #${ID} .om-result:last-child { border-bottom:none; }
+            #${ID} .om-result:hover { background:color-mix(in srgb, var(--vc, var(--accent)) 5%, transparent); }
+            #${ID} .om-result.selected { background:var(--sel); box-shadow:inset 2px 0 0 var(--cardc); }
 
-            /* ---- Skins (card style). Default = Clean. ---- */
-            /* Clean: solid card, keep vault-colored left border + subtle shadow (no murky tint) */
-            #${ID}.skin-clean .om-result { background:var(--card); }
-            #${ID}.skin-clean .om-result:hover { background:var(--card-hover); }
-            /* Solid: solid card, no left border (vault color only on dot/badge) */
-            #${ID}.skin-solid .om-result { background:var(--card); border-left-color:transparent; }
-            #${ID}.skin-solid .om-result:hover { background:var(--card-hover); }
-            /* Flat: borderless rows split by a divider, transparent body, no shadow */
-            #${ID}.skin-flat .om-body { background:transparent; box-shadow:none; padding:2px 0; }
-            #${ID}.skin-flat .om-header { background:transparent; border-bottom:1px solid rgba(var(--accent-rgb),0.25); border-radius:0; }
-            #${ID}.skin-flat .om-content { gap:0; }
-            #${ID}.skin-flat .om-result {
-                background:transparent; border:none; border-left:none; border-radius:0; box-shadow:none;
-                border-bottom:1px solid rgba(var(--accent-rgb),0.12); padding:11px 6px;
+            /* ---- 카드형 스킨 (Clean/Tinted/Solid — 상자형 대안. Flat은 Editorial과 동일) ---- */
+            #${ID}.skin-clean .om-list, #${ID}.skin-tinted .om-list, #${ID}.skin-solid .om-list { gap:8px; padding-top:2px; }
+            #${ID}.skin-clean .om-result, #${ID}.skin-tinted .om-result, #${ID}.skin-solid .om-result {
+                border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:var(--card);
             }
-            #${ID}.skin-flat .om-result:hover { background:color-mix(in srgb, var(--vc, var(--accent)) 8%, transparent); box-shadow:none; transform:none; }
+            #${ID}.skin-clean .om-result { border-left:3px solid var(--vc, var(--line)); }
+            #${ID}.skin-tinted .om-result {
+                background:color-mix(in srgb, var(--card) 88%, var(--vc, var(--card)) 12%);
+                border-left:3px solid var(--vc, var(--line));
+            }
+            #${ID}.skin-clean .om-result:hover, #${ID}.skin-tinted .om-result:hover, #${ID}.skin-solid .om-result:hover { background:var(--card-hover); }
+            #${ID}.skin-clean .om-result.selected, #${ID}.skin-tinted .om-result.selected, #${ID}.skin-solid .om-result.selected { border-color:var(--cardc); box-shadow:none; }
+            #${ID}.skin-clean .om-actions, #${ID}.skin-tinted .om-actions, #${ID}.skin-solid .om-actions { right:8px; }
 
             #${ID} .om-link { text-decoration:none; color:inherit; display:block; }
 
-            /* --cardc = this card's accent (vault color if set, else title/accent). Drives card accents. */
+            /* --cardc = 이 카드의 포인트색 (볼트색 > 제목색 > accent) */
             #${ID} .om-result { --cardc: var(--vc, var(--title, var(--accent))); }
             #${ID} .om-title {
                 display:flex; align-items:center; gap:8px; min-width:0; color:var(--cardc);
-                font-size:14px; font-weight:600; line-height:1.35; margin:0 0 5px;
+                font-size:14px; font-weight:700; line-height:1.45; margin:0 0 4px;
             }
-            /* Vault color scope. Accent (default): title/text stays readable, color only on accents.
-               Full: title + highlight also take the vault color (bolder, more saturated). */
-            #${ID}.vscope-accent .om-title { color:var(--title, var(--text)); } /* honors Note title color; else neutral */
-            #${ID}.vscope-accent .om-excerpt mark { background:color-mix(in srgb, var(--text) 16%, transparent); }
+            #${ID}.vscope-accent .om-title { color:var(--title, var(--text)); }
             #${ID} .om-title-text { min-width:0; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             #${ID} .om-title::before {
-                content:""; flex:0 0 auto; width:7px; height:7px; border-radius:50%;
+                content:""; flex:0 0 auto; width:6px; height:6px; border-radius:50%;
                 background:var(--cardc); opacity:0.9;
             }
-            #${ID} .om-link:hover .om-title-text { text-decoration:underline; }
+            #${ID} .om-link:hover .om-title-text { text-decoration:underline; text-underline-offset:3px; }
             #${ID} .om-badge {
-                flex:0 0 auto; font-size:10px; font-weight:700; letter-spacing:.02em;
-                color:var(--cardc); border:1px solid var(--cardc);
-                background:color-mix(in srgb, var(--cardc) 14%, transparent); padding:1px 7px; border-radius:999px; max-width:45%;
+                flex:0 0 auto; font-size:9.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase;
+                color:var(--cardc); border:1px solid color-mix(in srgb, var(--cardc) 45%, transparent);
+                padding:1px 6px; border-radius:4px; max-width:45%;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
             }
 
-            #${ID} .om-score { display:flex; align-items:center; gap:6px; margin:0 0 6px; }
-            #${ID} .om-bar { flex:1; height:4px; border-radius:999px; background:color-mix(in srgb, var(--cardc) 18%, transparent); overflow:hidden; }
-            #${ID} .om-bar > i { display:block; height:100%; background:var(--cardc); border-radius:999px; }
-            #${ID} .om-pct { font-size:10px; color:var(--faint); min-width:30px; text-align:right; }
+            /* 관련도 — 가는 헤어라인 게이지 (제목 밑줄로 보이지 않게 간격 확보) */
+            #${ID} .om-score { display:flex; align-items:center; gap:6px; margin:4px 0 8px; }
+            #${ID} .om-bar { flex:1; height:2px; background:color-mix(in srgb, var(--cardc) 15%, transparent); overflow:hidden; }
+            #${ID} .om-bar > i { display:block; height:100%; background:var(--cardc); }
+            #${ID} .om-pct { font-size:10px; color:var(--faint); min-width:30px; text-align:right; font-variant-numeric:tabular-nums; }
 
+            /* 발췌 — 하이라이트는 형광펜 대신 포인트색 볼드 */
             #${ID} .om-excerpt {
-                color:var(--muted); font-size:12.5px; line-height:1.5; margin-bottom:7px;
+                color:var(--muted); font-size:12.5px; line-height:1.65; margin-bottom:7px;
                 display:-webkit-box; -webkit-box-orient:vertical; overflow:hidden; cursor:text;
             }
             #${ID} .om-excerpt.expanded { -webkit-line-clamp:unset; display:block; }
-            #${ID} .om-excerpt mark { background:color-mix(in srgb, var(--cardc) 30%, transparent); color:inherit; padding:0 1px; border-radius:2px; }
+            #${ID} .om-excerpt mark { background:none; color:var(--cardc); font-weight:700; padding:0; }
+            #${ID}.vscope-accent .om-excerpt mark { color:var(--text); }
 
             #${ID} .om-path { color:var(--faint); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             #${ID} .om-path .om-sep { opacity:0.5; padding:0 2px; }
@@ -730,56 +773,52 @@
             }
             #${ID} .om-tags { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 6px; }
             #${ID} .om-tag {
-                font-size:10px; color:var(--cardc); background:color-mix(in srgb, var(--cardc) 13%, transparent);
+                font-size:10px; color:var(--cardc); background:color-mix(in srgb, var(--cardc) 11%, transparent);
                 padding:1px 7px; border-radius:999px;
             }
             #${ID} .om-tag::before { content:"#"; opacity:0.5; }
 
             #${ID} .om-actions {
-                position:absolute; top:8px; right:8px; display:flex; gap:3px;
+                position:absolute; top:9px; right:2px; display:flex; gap:3px;
                 opacity:0; transition:opacity .15s;
             }
             #${ID} .om-result:hover .om-actions, #${ID} .om-result.selected .om-actions { opacity:1; }
             #${ID} .om-act {
-                background:var(--tint); border:1px solid rgba(var(--accent-rgb),0.2); color:var(--accent);
-                border-radius:6px; font-size:10px; padding:2px 6px; cursor:pointer; line-height:1.4;
+                background:var(--card); border:1px solid var(--chipline); color:var(--muted);
+                border-radius:5px; font-size:10px; padding:2px 6px; cursor:pointer; line-height:1.4;
             }
-            #${ID} .om-act:hover { background:var(--accent); color:#fff; }
-            @media (prefers-color-scheme: dark) { #${ID} .om-act:hover { color:#1B1B1B; } }
+            #${ID} .om-act:hover { border-color:var(--accent); color:var(--accent); }
 
-            /* States */
+            /* 상태 */
             #${ID} .om-loading { display:block; text-align:center; color:var(--muted); padding:22px 12px; font-size:13px; }
-            #${ID} .om-error { color:#d93025; padding:16px; text-align:center; font-size:13px; line-height:1.6; }
-            #${ID} .om-error a { color:var(--accent); text-decoration:none; }
-            #${ID} .om-error a:hover { text-decoration:underline; }
+            #${ID} .om-error { color:#C0392B; padding:16px 4px; font-size:13px; line-height:1.6; }
+            #${ID} .om-error a { color:var(--accent); text-decoration:none; border-bottom:1px solid rgba(var(--accent-rgb),0.4); }
 
-            /* A4P: 목회 카테고리 칩 (상시 표시) */
-            #${ID} .om-cats { display:flex; flex-wrap:wrap; gap:4px; padding:2px 4px 8px; }
+            /* A4P: 목회 카테고리 칩 */
+            #${ID} .om-cats { display:flex; flex-wrap:wrap; gap:5px; padding:12px 2px 10px; }
             #${ID} .om-cats button {
-                background:var(--card); color:var(--muted); cursor:pointer;
-                border:1px solid rgba(var(--accent-rgb),0.25); border-radius:999px;
-                padding:4px 11px; font-size:12px; line-height:1; transition:background .15s, color .15s;
+                background:transparent; color:var(--muted); cursor:pointer;
+                border:1px solid var(--chipline); border-radius:999px;
+                padding:4px 11px; font-size:12px; line-height:1; transition:background .15s, color .15s, border-color .15s;
             }
             #${ID} .om-cats button:hover { border-color:var(--accent); color:var(--text); }
-            #${ID} .om-cats button.active { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
-            @media (prefers-color-scheme: dark) { #${ID} .om-cats button.active { color:#1B1B1B; } }
+            #${ID} .om-cats button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
 
-            /* A4P: 성경구절 고정 카드 */
+            /* A4P: 성경구절 고정 카드 — 좌측 잉크 룰 인용 블록 */
             #${ID} .om-bible { display:none; }
             #${ID} .om-bible-card {
-                margin:2px 4px 8px; padding:10px 12px; border-radius:10px;
-                border:1px solid rgba(var(--accent-rgb),0.35);
-                background:color-mix(in srgb, var(--accent) 8%, var(--card));
+                margin:12px 0 0; padding:11px 14px;
+                border-left:3px solid var(--accent);
+                background:var(--wash); border-radius:0 8px 8px 0;
             }
-            #${ID} .om-bible-title { font-size:13.5px; font-weight:700; color:var(--text); margin-bottom:7px; }
+            #${ID} .om-bible-title { font-size:14px; font-weight:800; color:var(--text); margin-bottom:8px; }
             #${ID} .om-bible-actions { display:flex; flex-wrap:wrap; gap:5px; }
             #${ID} .om-bible-actions button {
                 background:var(--card); color:var(--accent); cursor:pointer;
-                border:1px solid rgba(var(--accent-rgb),0.35); border-radius:7px;
-                padding:4px 9px; font-size:12px; line-height:1.4;
+                border:1px solid rgba(var(--accent-rgb),0.30); border-radius:6px;
+                padding:4px 9px; font-size:12px; font-weight:600; line-height:1.4;
             }
-            #${ID} .om-bible-actions button:hover { background:var(--accent); color:#fff; }
-            @media (prefers-color-scheme: dark) { #${ID} .om-bible-actions button:hover { color:#1B1B1B; } }
+            #${ID} .om-bible-actions button:hover { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
 
             /* A4P: doctrine(신학 태그)·성경구절 칩 */
             #${ID} .om-doctrine, #${ID} .om-verses { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 6px; }
@@ -788,38 +827,42 @@
                 padding:1px 7px; border-radius:999px;
             }
             #${ID} .om-verse {
-                font-size:10px; color:var(--cardc); cursor:pointer;
-                background:color-mix(in srgb, var(--cardc) 13%, transparent);
-                border:none; padding:2px 8px; border-radius:999px; line-height:1.5;
+                font-size:10px; color:var(--cardc); cursor:pointer; background:transparent;
+                border:1px dashed color-mix(in srgb, var(--cardc) 50%, transparent);
+                padding:2px 8px; border-radius:999px; line-height:1.5;
             }
             #${ID} .om-verse::before { content:"📖 "; }
-            #${ID} .om-verse:hover { background:var(--cardc); color:#fff; }
+            #${ID} .om-verse:hover { background:var(--cardc); border-style:solid; color:var(--on-accent); }
 
             /* A4P: 진단 패널 */
-            #${ID} .om-diag { padding:6px 4px; font-size:12.5px; color:var(--text); }
+            #${ID} .om-diag { padding:8px 0; font-size:12.5px; color:var(--text); }
             #${ID} .om-diag-vault {
-                background:var(--card); border-radius:10px; padding:10px 12px; margin-bottom:8px; line-height:1.8;
+                background:var(--wash); border-radius:8px; padding:10px 12px; margin-bottom:8px; line-height:1.8;
             }
             #${ID} .om-diag-fix { color:var(--muted); font-size:11.5px; }
             #${ID} .om-diag-foot { text-align:center; color:var(--faint); font-size:11px; padding-top:4px; }
 
-            /* A4P: 네이버 플로팅 패널 폴백 */
+            /* 플로팅 패널 (네이버 폴백 · 유튜브 · Bing 폴백) — 위젯이 종이 패널 위에 얹힘 */
             #a4p-float {
-                position:fixed; top:70px; right:16px; width:380px; max-height:calc(100vh - 90px);
+                position:fixed; top:70px; right:16px; width:392px; max-height:calc(100vh - 90px);
                 overflow-y:auto; z-index:9999;
+            }
+            #a4p-float #${ID} {
+                margin:0; min-width:0;
+                box-shadow:0 12px 32px rgba(0,0,0,0.16);
             }
 
             /* Toast */
             #om-toast {
                 position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(12px);
-                background:#202124; color:#fff; padding:8px 14px; border-radius:8px; font-size:13px;
-                font-family:Roboto, Arial, sans-serif; box-shadow:0 4px 16px rgba(0,0,0,0.3);
+                background:#1C1B18; color:#FBFAF7; padding:8px 14px; border-radius:8px; font-size:13px;
+                font-family:"SUIT","Pretendard","Apple SD Gothic Neo",Roboto,Arial,sans-serif; box-shadow:0 4px 16px rgba(0,0,0,0.3);
                 opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:99999;
                 max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
             }
             #om-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
-            @media (max-width:1200px) { #${ID} .om-header { padding:10px 14px; } }
+            @media (max-width:1200px) { #${ID} .om-header { padding-bottom:9px; } }
         `;
         document.head.appendChild(style);
     };
@@ -913,7 +956,7 @@
             catBible:  { label: "카테고리 키워드 — 성경", type: "text", default: "성경", title: "성경구절 노트 폴더 키워드." },
             catComm:   { label: "카테고리 키워드 — 주석", type: "text", default: "주석,강해", title: "주석·강해 자료 폴더 키워드." },
 
-            nbResults: { section: ["General settings", "공통 설정. 라벨에 마우스를 올리면 한국어 설명이 나옵니다."], label: "Results to display", type: "int", default: 5, title: "필터·정렬 후 보여줄 결과 개수." },
+            nbResults: { section: ["General settings", "공통 설정. 라벨에 마우스를 올리면 한국어 설명이 나옵니다."], label: "Results to display", type: "int", default: 10, title: "필터·정렬 후 보여줄 결과 개수." },
             excerptLines: { label: "Excerpt lines (click to expand)", type: "int", default: 3, title: "본문 미리보기 줄 수. 카드의 미리보기를 클릭하면 펼쳐짐." },
             showScore: { label: "Show relevance bar", type: "checkbox", default: true, title: "관련도(BM25) 막대와 % 표시." },
             showPath: { label: "Show path breadcrumb", type: "checkbox", default: true, title: "노트 경로를 브레드크럼으로 표시." },
@@ -924,10 +967,10 @@
             cleanFrontmatter: { label: "Strip frontmatter from preview", type: "checkbox", default: true, title: "미리보기에서 YAML(태그·작성자·날짜·wikilink 등) 제거하고 본문 위주로." },
             exactMatch: { label: "Exact match (wrap query in quotes)", type: "checkbox", default: false, title: "검색어를 따옴표로 묶어 정확 매칭." },
             excludeFolders: { label: "Exclude paths containing (comma-separated)", type: "text", default: "", title: "경로에 이 문자열이 포함된 결과 제외(콤마로 여러 개)." },
-            theme: { label: "Accent theme", type: "select", options: ["Ocean", "CMDS", "Obsidian", "Mono", "Forest", "Sunset", "Rose", "Grape", "Slate"], default: "Ocean", title: "기본 색 테마(헤더·단일볼트·fallback). Ocean=블루, CMDS=그린/핑크, Obsidian=퍼플, Mono=중립, Forest=그린, Sunset=오렌지, Rose=레드핑크, Grape=보라, Slate=청회색. 라이트/다크 자동." },
-            skin: { label: "Card style", type: "select", options: ["Clean", "Tinted", "Solid", "Flat"], default: "Clean", title: "카드 스타일. Clean=솔리드+볼트색 좌측보더(추천), Tinted=볼트색 은은한 틴트(예전), Solid=틴트·보더 없음, Flat=구분선만(가장 가벼움)." },
+            theme: { label: "Accent theme", type: "select", options: ["A4P", "Ocean", "Obsidian", "Mono", "Forest", "Sunset", "Rose", "Grape", "Slate"], default: "A4P", title: "포인트 색 테마. A4P=브랜드 딥그린(기본), Ocean=블루, Obsidian=퍼플, Mono=중립, Forest=그린, Sunset=오렌지, Rose=레드핑크, Grape=보라, Slate=청회색. 라이트/다크 자동 + 헤더 ◐ 버튼으로 수동 전환." },
+            skin: { label: "Card style", type: "select", options: ["Editorial", "Clean", "Tinted", "Solid"], default: "Editorial", title: "카드 스타일. Editorial=헤어라인 구분 에디토리얼(기본·추천), Clean=카드+볼트색 좌측보더, Tinted=볼트색 은은한 틴트, Solid=카드만." },
             vaultColorScope: { label: "Vault color scope", type: "select", options: ["Accent", "Full"], default: "Accent", title: "볼트색 적용 범위. Accent=포인트(닷·배지·보더·바·태그)만 색, 제목은 읽기 좋은 중립색(추천). Full=제목·하이라이트까지 볼트색(진하고 모노톤)." },
-            titleColor: { label: "Note title color (hex)", type: "text", default: "#94E2D5", title: "노트 제목 글자색(#RRGGBB). Accent 스코프=모든 제목에 적용(비우면 중립), Full 스코프=볼트색 우선." },
+            titleColor: { label: "Note title color (hex, blank = neutral)", type: "text", default: "", title: "노트 제목 글자색(#RRGGBB). 비우면 읽기 좋은 중립 잉크색(추천). Accent 스코프=모든 제목에 적용, Full 스코프=볼트색 우선." },
             accentColor: { label: "Accent override (hex, blank = theme)", type: "text", default: "", title: "포인트 색 전체 덮어쓰기(#RRGGBB). 비우면 테마 사용." },
             position: { label: "Sidebar position", type: "select", options: ["Bottom", "Top"], default: "Bottom", title: "결과 위젯을 구글 사이드바 위/아래 어디에 둘지." },
             vaultsParentDir: { label: "Common parent folder of your vaults", type: "text", default: "", title: "볼트들의 공통 상위 폴더. 설정하면 abs 경로 = 부모/볼트명/상대경로 로 자동 조립." },
@@ -964,8 +1007,8 @@
                     cleanFrontmatter: "미리보기에서 YAML(태그·작성자·날짜·wikilink 등) 제거하고 본문 위주로.",
                     exactMatch: "검색어를 따옴표로 묶어 정확 매칭.",
                     excludeFolders: "경로에 이 문자열이 포함된 결과 제외(콤마로 여러 개).",
-                    theme: "기본 색 테마(헤더·단일볼트·fallback). CMDS/Obsidian/Mono/Ocean/Forest/Sunset/Rose/Grape/Slate. 라이트/다크 자동 전환.",
-                    skin: "카드 스타일. Clean=솔리드+좌측보더(추천), Tinted=볼트색 틴트(예전), Solid=틴트·보더 없음, Flat=구분선만.",
+                    theme: "포인트 색 테마. A4P=브랜드 딥그린(기본)/Ocean/Obsidian/Mono/Forest/Sunset/Rose/Grape/Slate. 라이트/다크 자동 + 헤더 ◐ 버튼으로 수동 전환.",
+                    skin: "카드 스타일. Editorial=헤어라인 에디토리얼(기본·추천), Clean=카드+좌측보더, Tinted=볼트색 틴트, Solid=카드만.",
                     vaultColorScope: "볼트색 적용 범위. Accent=포인트만 색·제목은 중립(추천), Full=제목·하이라이트까지 볼트색(진함).",
                     titleColor: "노트 제목 글자색 (#RRGGBB).",
                     accentColor: "포인트 색 전체 덮어쓰기 (#RRGGBB). 비우면 테마 사용.",
@@ -1012,7 +1055,7 @@
                 if (dvault) S.vaultRoots[dvault] = root;
             }
         }
-        S.nbResults = Math.max(1, parseInt(gmc.get("nbResults"), 10) || 5);
+        S.nbResults = Math.max(1, parseInt(gmc.get("nbResults"), 10) || 10);
         S.excerptLines = Math.max(1, parseInt(gmc.get("excerptLines"), 10) || 3);
         S.showScore = !!gmc.get("showScore");
         S.showPath = !!gmc.get("showPath");
@@ -1021,13 +1064,18 @@
         S.maxTags = Math.max(1, parseInt(gmc.get("maxTags"), 10) || 5);
         S.showMatchedTerms = !!gmc.get("showMatchedTerms");
         S.titleColor = gmc.get("titleColor");
+        // 구버전(포크 원본) 기본 제목색이 저장돼 있으면 무시 — 새 디자인은 중립 잉크 제목이 기본
+        if (["#94E2D5", "#F5C2E7", "#E985A2"].includes(String(S.titleColor || "").trim().toUpperCase())) S.titleColor = "";
         S.accentColor = gmc.get("accentColor");
         S.cleanFrontmatter = !!gmc.get("cleanFrontmatter");
         S.exactMatch = !!gmc.get("exactMatch");
         S.excludeFolders = String(gmc.get("excludeFolders") || "")
             .split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
         S.theme = gmc.get("theme");
+        // 구버전 저장값 마이그레이션: 목록에 없는 테마(CMDS 등)는 브랜드 기본으로
+        if (!THEMES[String(S.theme || "").toLowerCase()]) S.theme = "A4P";
         S.skin = gmc.get("skin");
+        if (!["editorial", "clean", "tinted", "solid"].includes(String(S.skin || "").toLowerCase())) S.skin = "Editorial";
         S.vaultColorScope = gmc.get("vaultColorScope");
         S.position = gmc.get("position");
         S.vaultsParentDir = String(gmc.get("vaultsParentDir") || "").trim();
@@ -1055,6 +1103,21 @@
 
     const logo = `<svg height="1em" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 256 256">
 <path class="purple" d="M94.82 149.44c6.53-1.94 17.13-4.9 29.26-5.71a102.97 102.97 0 0 1-7.64-48.84c1.63-16.51 7.54-30.38 13.25-42.1l3.47-7.14 4.48-9.18c2.35-5 4.08-9.38 4.9-13.56.81-4.07.81-7.64-.2-11.11-1.03-3.47-3.07-7.14-7.15-11.21a17.02 17.02 0 0 0-15.8 3.77l-52.81 47.5a17.12 17.12 0 0 0-5.5 10.2l-4.5 30.18a149.26 149.26 0 0 1 38.24 57.2ZM54.45 106l-1.02 3.06-27.94 62.2a17.33 17.33 0 0 0 3.27 18.96l43.94 45.16a88.7 88.7 0 0 0 8.97-88.5A139.47 139.47 0 0 0 54.45 106Z"/><path class="purple" d="m82.9 240.79 2.34.2c8.26.2 22.33 1.02 33.64 3.06 9.28 1.73 27.73 6.83 42.82 11.21 11.52 3.47 23.45-5.8 25.08-17.73 1.23-8.67 3.57-18.46 7.75-27.53a94.81 94.81 0 0 0-25.9-40.99 56.48 56.48 0 0 0-29.56-13.35 96.55 96.55 0 0 0-40.99 4.79 98.89 98.89 0 0 1-15.29 80.34h.1Z"/><path class="purple" d="M201.87 197.76a574.87 574.87 0 0 0 19.78-31.6 8.67 8.67 0 0 0-.61-9.48 185.58 185.58 0 0 1-21.82-35.9c-5.91-14.16-6.73-36.08-6.83-46.69 0-4.07-1.22-8.05-3.77-11.21l-34.16-43.33c0 1.94-.4 3.87-.81 5.81a76.42 76.42 0 0 1-5.71 15.9l-4.7 9.8-3.36 6.72a111.95 111.95 0 0 0-12.03 38.23 93.9 93.9 0 0 0 8.67 47.92 67.9 67.9 0 0 1 39.56 16.52 99.4 99.4 0 0 1 25.8 37.31Z"/></svg>`;
+
+    // 헤더 아이콘 — 글자 문자(◐·⟳ 등)는 폰트에 따라 흐릿해서 전부 SVG로 통일
+    const _ic = (inner) =>
+        `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
+    const ICONS = {
+        bolt:    `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>`,
+        pulse:   _ic(`<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>`),
+        sun:     _ic(`<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>`),
+        moon:    _ic(`<path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>`),
+        halfsun: `<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor"/></svg>`,
+        filter:  _ic(`<path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/>`),
+        refresh: _ic(`<path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>`),
+        chevron: _ic(`<path d="M6 9l6 6 6-6"/>`),
+        dots:    `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>`,
+    };
 
     // ---------- networking ----------
     function baseQuery() {
@@ -1186,17 +1249,18 @@
     function buildShell() {
         const showBadgePref = S.showVaultBadge;
         const container = $(`
-            <div id="${ID}" class="theme-${S.theme.toLowerCase()} skin-${(S.skin || "Clean").toLowerCase()} vscope-${(S.vaultColorScope || "Accent").toLowerCase()}">
+            <div id="${ID}" class="theme-${S.theme.toLowerCase()} skin-${(S.skin || "Editorial").toLowerCase()} vscope-${(S.vaultColorScope || "Accent").toLowerCase()}">
                 <div class="om-header">
                     <span class="om-h-title">${logo}<span>A4P 통합검색</span></span>
-                    <span class="om-count" style="display:none">0</span>
+                    <span class="om-count" data-tip="옵시디언 볼트에서 찾은 결과 개수" style="display:none">0</span>
                     <span class="om-h-actions">
-                        <button class="om-icon-btn om-setup-code" title="설정 코드 붙여넣기 (옵시디언 A4P Helper에서 복사한 코드)">⚡</button>
-                        <button class="om-icon-btn om-diagnose" title="연결 진단">🩺</button>
-                        <button class="om-icon-btn om-toggle-controls" title="필터">⚙</button>
-                        <button class="om-icon-btn om-refresh" title="새로고침">⟳</button>
-                        <button class="om-icon-btn om-collapse" title="접기">▾</button>
-                        <button class="om-icon-btn om-settings" title="설정">⋯</button>
+                        <button class="om-icon-btn om-setup-code" data-tip="⚡ 설정 코드 붙여넣기 (옵시디언 A4P Helper에서 복사)">${ICONS.bolt}</button>
+                        <button class="om-icon-btn om-diagnose" data-tip="연결 진단">${ICONS.pulse}</button>
+                        <button class="om-icon-btn om-mode" data-tip="화면 모드: 자동">${ICONS.halfsun}</button>
+                        <button class="om-icon-btn om-toggle-controls" data-tip="정렬·필터 열기">${ICONS.filter}</button>
+                        <button class="om-icon-btn om-refresh" data-tip="다시 검색">${ICONS.refresh}</button>
+                        <button class="om-icon-btn om-collapse" data-tip="접기/펼치기">${ICONS.chevron}</button>
+                        <button class="om-icon-btn om-settings" data-tip="전체 설정 열기">${ICONS.dots}</button>
                     </span>
                 </div>
                 <div class="om-body">
@@ -1234,6 +1298,7 @@
         else $(sidebarSelector).append(container);
 
         // restore state
+        applyMode();
         if (state.collapsed) $(`#${ID}`).addClass("collapsed");
         if (state.controlsOpen || S.showControlsDefault) {
             $(`#${ID} .om-controls`).addClass("open");
@@ -1250,8 +1315,45 @@
         bindShellEvents();
     }
 
+    // 페이지의 실제 배경 밝기로 다크 여부 판단.
+    // OS 설정(prefers-color-scheme)이 아니라 위젯이 올라간 페이지를 따라가야
+    // "구글은 다크인데 맥은 라이트" 같은 조합에서도 색이 틀어지지 않는다.
+    function pageIsDark() {
+        for (const el of [document.body, document.documentElement]) {
+            if (!el) continue;
+            const bg = getComputedStyle(el).backgroundColor || "";
+            const m = bg.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)/);
+            if (!m) continue;
+            if (m[4] !== undefined && parseFloat(m[4]) === 0) continue; // 투명이면 다음 후보
+            return 0.2126 * m[1] + 0.7152 * m[2] + 0.0722 * m[3] < 128;
+        }
+        return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+    }
+
+    // 화면 모드(자동/라이트/다크) — 버튼 클릭으로 순환, GM 저장소에 기억.
+    // 자동 = 페이지 배경 감지 결과를 명시 클래스로 박아 넣는다 (OS와 무관).
+    const MODES = {
+        auto:  { icon: "halfsun", label: "자동 (페이지에 맞춤)" },
+        light: { icon: "sun",     label: "라이트 고정" },
+        dark:  { icon: "moon",    label: "다크 고정" },
+    };
+    function applyMode() {
+        const m = MODES[state.mode] || MODES.auto;
+        const dark = state.mode === "dark" || (state.mode === "auto" && pageIsDark());
+        $(`#${ID}`).removeClass("om-light om-dark").addClass(dark ? "om-dark" : "om-light");
+        $(`#${ID} .om-mode`).html(ICONS[m.icon])
+            .attr("data-tip", `화면 모드: ${m.label} — 클릭해서 순환`);
+    }
+
     function bindShellEvents() {
         $(document).on("click", `#${ID} .om-settings`, (e) => { e.preventDefault(); gmc.open(); });
+
+        $(document).on("click", `#${ID} .om-mode`, function () {
+            const order = ["auto", "light", "dark"];
+            state.mode = order[(order.indexOf(state.mode) + 1) % order.length];
+            setVal("om_mode", state.mode);
+            applyMode();
+        });
 
         $(document).on("click", `#${ID} .om-toggle-controls`, function () {
             state.controlsOpen = !state.controlsOpen;
@@ -1263,8 +1365,7 @@
 
         $(document).on("click", `#${ID} .om-collapse`, function () {
             state.collapsed = !state.collapsed;
-            $(`#${ID}`).toggleClass("collapsed", state.collapsed);
-            $(this).text(state.collapsed ? "▸" : "▾");
+            $(`#${ID}`).toggleClass("collapsed", state.collapsed); // 화살표 회전은 CSS가 처리
             setVal("om_collapsed", state.collapsed);
         });
 
@@ -1382,7 +1483,7 @@
     function setCount(n) {
         const el = $(`#${ID} .om-count`);
         if (n === null || n === undefined) el.hide();
-        else el.text(String(n)).show();
+        else el.text(`${n}건`).show();
     }
 
     function renderResults() {
@@ -1403,8 +1504,10 @@
             const url = openUrl(item);
             const pct = Math.round(((Number(item.score) || 0) / state.topScore) * 100);
             const vaultName = item._label || item.vault;
+            // 볼트 자동색(이름 해시)은 볼트가 2개 이상일 때만 구분 용도로 쓴다.
+            // 단일 볼트에서는 슬롯에 Color hex를 직접 지정한 경우에만 색을 입힘 — 아니면 브랜드 테마색.
             const vc = vaultColor(item);
-            const colorize = showBadge || validHex(item._color);
+            const colorize = validHex(item._color) || (showBadge && multiVault);
             const badge = showBadge ? `<span class="om-badge">${escapeHtml(vaultName)}</span>` : "";
             const scoreHtml = S.showScore
                 ? `<div class="om-score"><span class="om-bar"><i style="width:${pct}%"></i></span><span class="om-pct">${pct}%</span></div>`
@@ -1469,6 +1572,9 @@
         document.addEventListener("keydown", (e) => {
             if (isTyping(e) || state.collapsed) return;
             if (!state.view.length) return;
+            // 위젯이 숨겨진 상태(유튜브 비검색 페이지 등)에서는 사이트 단축키(j/k)를 가로채지 않는다
+            const w = $(`#${ID}`);
+            if (!w.length || !w.is(":visible")) return;
             if (e.key === "j" || e.key === "ArrowDown") {
                 e.preventDefault(); setSelected(state.selected < 0 ? 0 : state.selected + 1);
             } else if (e.key === "k" || e.key === "ArrowUp") {
@@ -1488,7 +1594,32 @@
     }
 
     // ---------- boot ----------
-    console.log("Loading A4P Omnisearch v1.0.0 (engine: " + ENGINE.key + ")");
+    console.log(`Loading A4P Omnisearch v${VERSION} (engine: ${ENGINE.key})`);
+
+    // 유튜브는 검색결과 페이지(/results)에서만 위젯을 띄운다.
+    const onSearchPage = () => ENGINE.key !== "youtube" || location.pathname === "/results";
+
+    function mountWidget() {
+        if (!sidebarSelector || !$(sidebarSelector)[0]) {
+            if (ENGINE.key === "google" && $(ENGINE.fallbackParent)[0]) {
+                $(ENGINE.fallbackParent).append('<div id="rhs" style="min-width: 400px; flex-shrink: 0;"></div>');
+            } else {
+                // 사이드바 컨테이너가 없는 사이트(유튜브)나 못 찾은 경우(네이버·Bing) → 우측 고정 플로팅 패널
+                $("body").append('<div id="a4p-float"></div>');
+                sidebarSelector = "#a4p-float";
+            }
+        }
+        buildShell();
+        applyCustomColors();
+        bindKeyboard();
+
+        // keep widget pinned to chosen edge if the engine injects more cards
+        waitForKeyElements(sidebarSelector, () => {
+            const w = $(`#${ID}`);
+            if (S.position === "Top") { if (w.prev().length > 0) w.prependTo(sidebarSelector); }
+            else { if (w.next().length > 0) w.appendTo(sidebarSelector); }
+        });
+    }
 
     onInit(gmc).then(async () => {
         loadSettings();
@@ -1497,29 +1628,26 @@
         state.minRel = await getVal("om_minRel", 0);
         state.type = await getVal("om_type", "all");
         state.cat = await getVal("om_cat", "all");
+        state.mode = await getVal("om_mode", "auto");
 
         injectStyles();
-        if (!$(sidebarSelector)[0]) {
-            if (ENGINE.key === "google" && $(ENGINE.fallbackParent)[0]) {
-                $(ENGINE.fallbackParent).append('<div id="rhs" style="min-width: 400px; flex-shrink: 0;"></div>');
-            } else {
-                // 네이버 등에서 사이드바 컨테이너를 못 찾으면 우측 고정 플로팅 패널로 폴백
-                $("body").append('<div id="a4p-float"></div>');
-                sidebarSelector = "#a4p-float";
-            }
+        if (onSearchPage()) {
+            mountWidget();
+            runSearch();
         }
-        buildShell();
-        applyCustomColors();
-        bindKeyboard();
-        runSearch();
 
-        console.log("Loaded A4P Omnisearch v1.0.0");
+        // 유튜브는 SPA: 페이지 이동 시 새로고침이 없으므로 자체 내비게이션 이벤트에 반응한다.
+        if (ENGINE.key === "youtube") {
+            document.addEventListener("yt-navigate-finish", () => {
+                if (!onSearchPage()) { $("#a4p-float").hide(); return; }
+                if (!$(`#${ID}`).length) mountWidget();
+                else $("#a4p-float").show();
+                state.refine = "";
+                $(`#${ID} .om-refine`).val("");
+                runSearch();
+            });
+        }
 
-        // keep widget pinned to chosen edge if Google injects more cards
-        waitForKeyElements(sidebarSelector, () => {
-            const w = $(`#${ID}`);
-            if (S.position === "Top") { if (w.prev().length > 0) w.prependTo(sidebarSelector); }
-            else { if (w.next().length > 0) w.appendTo(sidebarSelector); }
-        });
+        console.log(`Loaded A4P Omnisearch v${VERSION}`);
     });
 })();

@@ -25,7 +25,7 @@ export class A4PSettingTab extends PluginSettingTab {
 		containerEl.empty();
 		containerEl.createEl("h2", { text: "A4P Omnisearch Helper" });
 		containerEl.createEl("p", {
-			text: "구글·네이버 검색 옆에 내 볼트를 띄우는 A4P 통합검색의 설정 도우미입니다. 아래 체크리스트가 모두 ✅가 되면 [설정 코드 복사]를 눌러 브라우저 위젯의 ⚡ 버튼에 붙여넣으세요.",
+			text: "구글·네이버·Bing·유튜브 검색 옆에 내 볼트를 띄우는 A4P 통합검색의 설정 도우미입니다. 아래 체크리스트가 모두 ✅가 되면 [설정 코드 복사]를 눌러 브라우저 위젯의 ⚡ 버튼에 붙여넣으세요.",
 			cls: "a4p-desc",
 		});
 		this.renderDashboard(containerEl.createDiv({ cls: "a4p-dashboard" }));
