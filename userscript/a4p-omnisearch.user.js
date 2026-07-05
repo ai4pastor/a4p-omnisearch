@@ -6,7 +6,7 @@
 // @updateURL    https://raw.githubusercontent.com/abadcsh-tech/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/abadcsh-tech/a4p-omnisearch/issues
-// @version      1.2.5
+// @version      1.2.6
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -39,7 +39,7 @@
     "use strict";
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.2.5";
+    const VERSION = "1.2.6";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
     // ---------- 검색엔진 어댑터 ----------
@@ -1596,8 +1596,16 @@
     // ---------- boot ----------
     console.log(`Loading A4P Omnisearch v${VERSION} (engine: ${ENGINE.key})`);
 
-    // 유튜브는 검색결과 페이지(/results)에서만 위젯을 띄운다.
-    const onSearchPage = () => ENGINE.key !== "youtube" || location.pathname === "/results";
+    // 검색결과 페이지에서만 위젯을 띄운다.
+    // @match가 도메인 전체에 걸리므로 경로로 한 번 거른다 — 구글 지도·이미지·홈 등에서 빈 패널이 뜨는 것 방지.
+    const SEARCH_PATHS = { google: "/search", bing: "/search", youtube: "/results" };
+    const onSearchPage = () => {
+        const p = SEARCH_PATHS[ENGINE.key];
+        if (p && location.pathname !== p) return false;
+        // 구글은 표준 웹검색 레이아웃(#rhs/#rcnt)이 있을 때만 — 지도·이미지 등 특수 레이아웃 제외
+        if (ENGINE.key === "google" && !$("#rhs")[0] && !$("#rcnt")[0]) return false;
+        return true;
+    };
 
     function mountWidget() {
         if (!sidebarSelector || !$(sidebarSelector)[0]) {
