@@ -1,11 +1,11 @@
 "use strict";
 // ==UserScript==
 // @name         A4P Omnisearch — 목회자 통합검색
-// @namespace    https://github.com/abadcsh-tech/a4p-omnisearch
-// @downloadURL  https://raw.githubusercontent.com/abadcsh-tech/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
-// @updateURL    https://raw.githubusercontent.com/abadcsh-tech/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
+// @namespace    https://github.com/ai4pastor/a4p-omnisearch
+// @downloadURL  https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
+// @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
-// @supportURL   https://github.com/abadcsh-tech/a4p-omnisearch/issues
+// @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
 // @version      1.2.6
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
