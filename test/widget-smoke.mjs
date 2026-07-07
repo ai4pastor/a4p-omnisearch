@@ -1,4 +1,4 @@
-// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 85케이스
+// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 91케이스
 // 실행 준비: npm install   (레포 루트에서 — devDependencies: jsdom, jquery)
 // 실행:      npm test  (파서 테스트 포함)  또는  node test/widget-smoke.mjs
 // 검증 범위: 4개 엔진 마운트 위치, 에디토리얼 스킨/테마 클래스, 카테고리 칩,
@@ -132,9 +132,9 @@ async function makeEnv(opts = {}) {
       calls.xhrUrls.push(o.url);
       setTimeout(() => {
         if (/raw\.githubusercontent\.com/.test(o.url)) {
-          o.onload({ responseText: opts.latestVersion ? `// @version      ${opts.latestVersion}\n` : "", response: "" });
+          o.onload({ status: 200, responseText: opts.latestVersion ? `// @version      ${opts.latestVersion}\n` : "", response: "" });
         } else {
-          o.onload({ response: opts.respond ? opts.respond(o.url) : FAKE_RESULTS });
+          o.onload({ status: 200, response: opts.respond ? opts.respond(o.url) : FAKE_RESULTS });
         }
       }, 0);
     },
@@ -292,6 +292,54 @@ console.log("\n[v1.3.3] 숨김 필터 안내 + 원클릭 해제");
   check("필터 해제 클릭 → 2건 모두 표시", titles().length === 2);
   check("필터 해제가 GM 저장소에 반영 (om_minRel=0)", (await env.window.GM.getValue("om_minRel", -1)) === 0);
   check("해제 후 안내 사라짐", env.$(`#OmnisearchObsidianResults .om-filter-hint`).length === 0);
+}
+
+console.log("\n[v1.4.0] 구절 노트 직접 조회·핀 (Omnisearch 상위 50건 캡 우회)");
+{
+  // 실기기 재현: 주석 노트가 상위 50건 독점 → 구절 노트가 응답에 없음 → 성경 칩 0건이던 상황
+  const commResults = JSON.stringify([
+    { score: 4498, vault: "csh_remote", path: "170. 성경/171. 성경주석/신약/04.요한복음/요한복음 1장 통합주석.md", basename: "요한복음 1장 통합주석", excerpt: "요1:1 주석…" },
+    { score: 1647, vault: "csh_remote", path: "300. Sermons/사랑의 설교.md", basename: "사랑의 설교", excerpt: "요1_1 인용…" },
+  ]);
+  const respond = (u) => {
+    const url = decodeURIComponent(u);
+    if (url.includes("/vault/") && url.endsWith("/")) return JSON.stringify({ files: ["04.요한복음/", "01.마태복음/"] });
+    if (url.includes("/vault/") && url.includes("요1_1.md")) return JSON.stringify({ content: "---\nx: 1\n---\n태초에 말씀이 계시니라 이 말씀이 하나님과 함께 계셨으니", tags: [] });
+    if (url.includes("/vault/")) return JSON.stringify({ content: "" }); // 그 외 노트 fetch (enrich)
+    return commResults; // Omnisearch 응답 (구절 노트 없음)
+  };
+  const env = await makeEnv({
+    q: "요1:1",
+    respond,
+    gmStore: {},
+    gmValues: {
+      v1_port: "51367", v1_vault: "csh_remote", v1_lrPort: "27123", v1_lrKey: "testkey",
+      useLocalRest: true, catBible: "170. 성경/신약,170. 성경/구약",
+    },
+  });
+  const titles = () => env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title-text").text()).get();
+  check("구절 노트(요1_1)가 REST 직접 조회로 최상단 핀", titles()[0] === "요1_1");
+  check("핀 노트의 경로가 실제 탐색 결과 (신약/04.요한복음)", (env.window.document.querySelector("#OmnisearchObsidianResults .om-result .om-path") || {}).textContent?.includes("04.요한복음") ?? true);
+  // 성경 칩: 주석·설교는 걸러지고 핀된 구절 노트만 남는다
+  env.$(`#OmnisearchObsidianResults .om-cat[data-v="bible"]`).trigger("click");
+  const bibleTitles = titles();
+  check("성경 칩 → 구절 노트만 표시 (주석·설교 제외)", bibleTitles.length === 1 && bibleTitles[0] === "요1_1");
+  // 책 폴더 캐시 저장 확인
+  const cacheVal = await env.window.GM.getValue("om_bookDir__csh_remote__요한복음", "");
+  check("책 폴더 경로가 GM에 캐시됨", cacheVal === "170. 성경/신약/04.요한복음");
+}
+
+console.log("\n[v1.4.0] 빈 카테고리 → 전체 보기 복귀");
+{
+  const resp = JSON.stringify([
+    { score: 10, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+  ]);
+  const env = await makeEnv({ q: "설교", respond: () => resp });
+  env.$(`#OmnisearchObsidianResults .om-cat[data-v="devo"]`).trigger("click"); // 묵상 칩 — 해당 없음
+  const emptyHint = env.$(`#OmnisearchObsidianResults .om-cat-reset`);
+  check("빈 카테고리에서 '전체 보기' 링크 표시", emptyHint.length === 1);
+  emptyHint.trigger("click");
+  check("전체 보기 클릭 → 결과 복귀", env.$(`#OmnisearchObsidianResults .om-result`).length === 1);
 }
 
 console.log("\n[v1.3.3] 중복 실행 가드");

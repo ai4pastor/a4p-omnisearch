@@ -5,7 +5,7 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.3.3
+// @version      1.4.0
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -48,7 +48,7 @@
     document.documentElement.setAttribute("data-a4p-omnisearch", "1");
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.3.3";
+    const VERSION = "1.4.0";
     const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
@@ -379,6 +379,88 @@
                 ontimeout: () => { console.warn("[Omnisearch CMDS] Local REST timeout →", base); resolve(null); },
             });
         });
+    }
+
+    // ---------- 구절 노트 직접 조회 (Omnisearch 상위 50건 캡 우회) ----------
+    // Omnisearch HTTP는 응답을 상위 ~50건에서 자른다. 주석·설교처럼 구절 토큰을 수십 번 포함한
+    // 큰 노트가 점수 상위를 독점하면 정작 구절 노트(요1_1.md — 제목 한 번, 본문 짧음)는 응답에
+    // 못 들어온다. 그래서 검색 랭킹에 기대지 않고 Local REST의 폴더 목록으로 실제 경로를 찾아
+    // 결과 맨 위에 핀(pin)한다. 책 폴더 경로는 볼트별로 GM에 캐시.
+    function listDir(rest, dir) {
+        return new Promise((resolve) => {
+            const base = lrBase(rest.port);
+            if (!base) { resolve([]); return; }
+            const enc = String(dir || "").replace(/\/+$/, "").split("/").map(encodeURIComponent).join("/");
+            GM.xmlHttpRequest({
+                method: "GET",
+                url: `${base}/vault/${enc}/`,
+                headers: { "Authorization": "Bearer " + rest.key },
+                timeout: S.requestTimeout,
+                onload: (r) => { try { resolve(JSON.parse(r.response).files || []); } catch (e) { resolve([]); } },
+                onerror: () => resolve([]),
+                ontimeout: () => resolve([]),
+            });
+        });
+    }
+
+    function makePinnedItem(cfg, path, name, content) {
+        return {
+            vault: cfg.dvault || cfg.label || "", path, basename: name,
+            score: 0, foundWords: [], matches: [],
+            excerpt: bodyPreview(content, name), // 구절 본문 미리보기
+            _pinned: true, _aux: true, _rel: 1,
+            _label: cfg.label, _color: cfg.color, _dvault: cfg.dvault,
+            _restPort: cfg.lrPort, _restKey: cfg.lrKey,
+        };
+    }
+
+    async function verseNotesFromVault(cfg, roots) {
+        const rest = { port: cfg.lrPort, key: cfg.lrKey };
+        const book = state.bibleRef.book;
+        const cacheKey = "om_bookDir__" + (cfg.dvault || cfg.label || cfg.port) + "__" + book;
+        const cached = await getVal(cacheKey, "");
+        const tryDirs = cached ? [cached] : [];
+        if (!cached) {
+            // 성경 카테고리 폴더들에서 책 폴더(이름에 책 이름 포함)를 찾는다. 예: 신약/ → "04.요한복음/"
+            for (const root of roots) {
+                const files = await listDir(rest, root);
+                const hit = files.find((f) => f.endsWith("/") && f.includes(book));
+                if (hit) tryDirs.push(root.replace(/\/+$/, "") + "/" + hit.replace(/\/+$/, ""));
+                if (files.includes(state.bibleRef.noteNames[0] + ".md")) tryDirs.push(root); // 루트에 바로 있는 볼트 구조
+            }
+        }
+        for (const dir of tryDirs) {
+            const found = [];
+            for (const name of state.bibleRef.noteNames.slice(0, 3)) {
+                const note = await fetchNote(rest, dir + "/" + name + ".md");
+                if (note && typeof note.content === "string") found.push(makePinnedItem(cfg, dir + "/" + name + ".md", name, note.content));
+            }
+            if (found.length) { setVal(cacheKey, dir); return found; }
+        }
+        if (cached) setVal(cacheKey, ""); // 캐시가 낡았으면 비워서 다음 검색 때 재탐색
+        return [];
+    }
+
+    async function resolveVerseNotes() {
+        try {
+            if (!state.bibleRef || !S.useLocalRest) return [];
+            const roots = S.catBibleRaw || [];
+            if (!roots.length) return [];
+            for (const cfg of (S.vaults || []).filter((v) => v.lrPort && v.lrKey)) {
+                const notes = await verseNotesFromVault(cfg, roots);
+                if (notes.length) return notes; // 첫 볼트에서 찾으면 충분
+            }
+        } catch (e) { /* 구절 핀은 보조 기능 — 실패해도 검색은 정상 진행 */ }
+        return [];
+    }
+
+    // 늦게 도착한 구절 노트를 결과 맨 앞에 끼워 넣고 다시 그린다 (Omnisearch 중복은 제거)
+    function mergePinned(pinned) {
+        if (!pinned || !pinned.length) return;
+        const keys = new Set(pinned.map((p) => (p.vault || "") + "|" + (p.path || "")));
+        state.raw = pinned.concat(state.raw.filter((r) => !keys.has((r.vault || "") + "|" + (r.path || ""))));
+        applyPipeline();
+        renderResults();
     }
 
     // Pull tags from a Local REST note JSON. Order = curated first:
@@ -1226,6 +1308,8 @@
             bible:  kwList("catBible"),
             comm:   kwList("catComm"),
         };
+        // 구절 노트 직접 조회용 — REST 경로에는 원본 대소문자·경로가 필요해서 lowercase 없이 따로 보관
+        S.catBibleRaw = String(gmc.get("catBible") || "").split(",").map((s) => s.trim()).filter(Boolean);
     }
 
     const logo = `<svg height="1em" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 256 256">
@@ -1304,6 +1388,8 @@
         const auxJobs = [];
         ports.forEach((p, i) => auxQueries.forEach((q) =>
             auxJobs.push(fetchPort(p.port, q).then((r) => ({ i, r })))));
+        // 구절 노트 직접 조회는 병렬로 시작하되 검색 렌더를 막지 않는다 (도착하면 맨 위에 합류)
+        const pinnedJob = resolveVerseNotes();
         Promise.all([Promise.all(mains), Promise.all(auxJobs)]).then(([responses, auxResults]) => {
             if (responses.every((r) => r === null)) {
                 showConnError(ports);
@@ -1342,6 +1428,7 @@
             state.vaultsSeen = new Set(merged.map((r) => r._label || r.vault)).size;
             applyPipeline();
             renderResults();
+            pinnedJob.then(mergePinned); // 구절 노트가 찾아지면 결과 맨 위에 핀
         });
     }
 
@@ -1386,7 +1473,8 @@
             // 순수 구절 쿼리("요 3:16")는 구절노트·인용노트(aux)가 본론이라 먼저, 혼합 쿼리는 메인 먼저.
             const auxFirst = state.bibleRef.refOnly ? 1 : 0;
             v.sort((a, b) =>
-                (auxFirst ? (b._aux ? 1 : 0) - (a._aux ? 1 : 0) : (a._aux ? 1 : 0) - (b._aux ? 1 : 0))
+                (b._pinned ? 1 : 0) - (a._pinned ? 1 : 0) // 직접 조회한 구절 노트가 항상 최상단
+                || (auxFirst ? (b._aux ? 1 : 0) - (a._aux ? 1 : 0) : (a._aux ? 1 : 0) - (b._aux ? 1 : 0))
                 || (b._rel || 0) - (a._rel || 0)
                 || (Number(b.score) || 0) - (Number(a.score) || 0));
         } else {
@@ -1547,6 +1635,14 @@
         // ⚡ 설정 코드 붙여넣기 / 🩺 연결 진단
         $(document).on("click", `#${ID} .om-setup-code`, (e) => { e.preventDefault(); importSetupCode(); });
         $(document).on("click", `#${ID} .om-diagnose`, (e) => { e.preventDefault(); runDiagnostics(); });
+        // 빈 카테고리에서 전체 보기로 복귀
+        $(document).on("click", `#${ID} .om-cat-reset`, (e) => {
+            e.preventDefault();
+            state.cat = "all"; setVal("om_cat", "all");
+            $(`#${ID} .om-cats .om-cat`).removeClass("active").filter(`[data-v="all"]`).addClass("active");
+            applyPipeline();
+            renderResults();
+        });
         // 숨김 필터 원클릭 해제: 최소 관련도 0 + 타입 전체로 되돌리고 저장·재렌더
         $(document).on("click", `#${ID} .om-filter-reset`, (e) => {
             e.preventDefault();
@@ -1663,7 +1759,11 @@
             : "";
 
         if (state.view.length === 0) {
-            list.html(hint || `<span class="om-loading">옵시디언에서 결과 없음</span>`);
+            // 카테고리 칩이 모든 결과를 걸렀으면 원클릭 복귀 제공 (성경 칩인데 구절 노트가 랭킹 밖인 경우 등)
+            const catHint = state.cat !== "all" && state.raw.length > 0
+                ? `<div class="om-filter-hint">이 카테고리에 해당하는 결과가 없습니다 (전체 ${state.raw.length}건) — <a href="#" class="om-cat-reset">전체 보기</a></div>`
+                : "";
+            list.html((hint + catHint) || `<span class="om-loading">옵시디언에서 결과 없음</span>`);
             return;
         }
         if (hint) list.append(hint);
