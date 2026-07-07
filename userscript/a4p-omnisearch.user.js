@@ -1,4 +1,3 @@
-"use strict";
 // ==UserScript==
 // @name         A4P Omnisearch — 목회자 통합검색
 // @namespace    https://github.com/ai4pastor/a4p-omnisearch
@@ -6,7 +5,7 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.2.6
+// @version      1.3.0
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -33,13 +32,15 @@
 // @grant        GM.setValue
 // @connect      localhost
 // @connect      127.0.0.1
+// @connect      raw.githubusercontent.com
 // ==/UserScript==
 /* globals GM_config, jQuery, $, waitForKeyElements */
 (function () {
     "use strict";
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.2.6";
+    const VERSION = "1.3.0";
+    const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
     // ---------- 검색엔진 어댑터 ----------
@@ -307,8 +308,13 @@
         }
         const display = book + " " + chapter + (verse != null ? ":" + verse + (verseEnd != null ? "-" + verseEnd : "") : "장");
         // 보조 쿼리: 구절 노트명 형식으로도 검색 → 구절 노트 + 그 구절을 frontmatter 성경구절/본문에 인용한 설교·설교조각이 함께 잡힘
-        const auxQueries = verse != null ? noteNames.slice() : [abbr + chapter + "_1", abbr + chapter];
-        return { abbr, book, chapter, verse, verseEnd, display, noteNames, auxQueries };
+        // 장 단위는 prefix 후보(요3_)를 추가해 그 장의 다른 절 인용 노트도 잡는다 (Omnisearch=minisearch가 마지막 텀에 prefix 매칭).
+        const auxQueries = verse != null
+            ? noteNames.slice()
+            : [abbr + chapter + "_", abbr + chapter + "_1", abbr + chapter];
+        // refOnly: 쿼리가 구절 참조뿐인지 (검색어에 다른 키워드가 없는지) — 정렬 그룹 배치에 사용
+        const rest = (" " + String(query || "")).replace(m[0], " ").replace(/\s+/g, " ").trim();
+        return { abbr, book, chapter, verse, verseEnd, display, noteNames, auxQueries, refOnly: rest.length === 0 };
     }
 
     // ---------- Local REST API enrichment (real body + real tags) ----------
@@ -494,9 +500,51 @@
         copyText(`“${txt.slice(0, 120)}${cut ? "…" : ""}” — [[${item.basename}]]`);
     }
 
+    // ---------- 설정 코드(A4P1:) 멀티볼트 온보딩 ----------
+    // 슬롯 i(1~6)의 현재 상태 요약
+    function slotInfo(i) {
+        return {
+            i,
+            port:  String(gmc.get("v" + i + "_port")  || "").trim(),
+            name:  String(gmc.get("v" + i + "_name")  || "").trim(),
+            vault: String(gmc.get("v" + i + "_vault") || "").trim(),
+        };
+    }
+
+    // 설정 코드가 들어갈 슬롯 선택: 같은 vault → 갱신 / 빈 슬롯 → 신규 / 만석 → 사용자 선택. null = 취소.
+    function chooseSlot(cfg) {
+        const slots = []; for (let i = 1; i <= 6; i++) slots.push(slotInfo(i));
+        const vault = String(cfg.vault || "").trim();
+        // 1) 같은 볼트명 슬롯이 있으면 그 슬롯 갱신 (두 번 붙여넣어도 중복 등록 안 됨)
+        if (vault) { const hit = slots.find((s) => s.vault === vault); if (hit) return hit.i; }
+        // 2) 첫 빈 슬롯. 슬롯1은 미설정 기본값(port 51361/name Main)이 차 있어 보이므로 vault 공백이면 빈 것으로 본다
+        const free = slots.find((s) => !s.port || (s.i === 1 && !s.vault));
+        if (free) return free.i;
+        // 3) 만석 → 교체할 슬롯을 사용자가 선택
+        const listing = slots.map((s) => `${s.i}. ${s.name || "(이름 없음)"} — ${s.vault || "볼트명 미지정"} (포트 ${s.port})`).join("\n");
+        const ans = window.prompt("볼트 슬롯 6개가 모두 사용 중입니다.\n교체할 슬롯 번호(1~6)를 입력하세요:\n\n" + listing, "");
+        if (ans == null) return null;
+        const n = parseInt(ans, 10);
+        if (!(n >= 1 && n <= 6)) { alert("1~6 사이 번호를 입력해 주세요. 적용을 취소합니다."); return null; }
+        return n;
+    }
+
+    // cfg를 슬롯 i에 기록. 교체 시 이전 볼트의 잔여값(REST 키·root)이 남지 않게 color 제외 전 키를 덮어쓴다.
+    function writeSlot(i, cfg) {
+        gmc.set("v" + i + "_port",  String(cfg.omniPort || "51361"));
+        gmc.set("v" + i + "_name",  String(cfg.label || cfg.vault || "내 볼트"));
+        gmc.set("v" + i + "_vault", String(cfg.vault || ""));
+        gmc.set("v" + i + "_root",  String(cfg.root || ""));
+        gmc.set("v" + i + "_lrPort", cfg.restPort ? String(cfg.restPort) : "");
+        gmc.set("v" + i + "_lrKey",  String(cfg.restKey || ""));
+        if (cfg.restPort && cfg.restKey) gmc.set("useLocalRest", true);
+        // v{i}_color는 사용자 취향값이라 건드리지 않음 (비우면 이름 해시 자동색)
+    }
+
     // 옵시디언 A4P Helper 플러그인이 만들어 준 설정 코드(A4P1:base64url JSON)를 붙여넣어 원클릭 설정.
+    // 볼트마다 코드를 한 번씩 붙여넣으면 슬롯(최대 6개)에 차례로 등록돼 멀티볼트 동시 검색이 된다.
     function importSetupCode() {
-        const raw = window.prompt("옵시디언 'A4P Omnisearch Helper' 플러그인에서 복사한 설정 코드를 붙여넣으세요.\n(A4P1: 로 시작하는 코드)", "");
+        const raw = window.prompt("옵시디언 'A4P Omnisearch Helper' 플러그인에서 복사한 설정 코드를 붙여넣으세요.\n(A4P1: 로 시작하는 코드)\n\n💡 볼트가 여러 개라면 각 볼트의 코드를 한 번씩 붙여넣으세요 — 함께 검색됩니다.", "");
         if (!raw) return;
         const s = raw.trim();
         if (!/^A4P1:/.test(s)) { alert("설정 코드 형식이 아닙니다. 'A4P1:' 로 시작하는 코드를 붙여넣어 주세요."); return; }
@@ -509,21 +557,42 @@
             cfg = JSON.parse(new TextDecoder("utf-8").decode(bytes));
         } catch (e) { alert("설정 코드를 해석할 수 없습니다. 복사가 잘렸는지 확인해 주세요."); return; }
         if (!cfg || cfg.v !== 1) { alert("지원하지 않는 설정 코드 버전입니다. 플러그인을 업데이트해 주세요."); return; }
-        gmc.set("v1_port", String(cfg.omniPort || "51361"));
-        gmc.set("v1_name", String(cfg.label || cfg.vault || "내 볼트"));
-        gmc.set("v1_vault", String(cfg.vault || ""));
-        if (cfg.root) gmc.set("v1_root", String(cfg.root));
-        if (cfg.restPort) { gmc.set("v1_lrPort", String(cfg.restPort)); gmc.set("useLocalRest", true); }
-        if (cfg.restKey) gmc.set("v1_lrKey", String(cfg.restKey));
-        if (cfg.bibleFormat) gmc.set("bibleNoteFormat", String(cfg.bibleFormat));
-        // Helper가 보낸 카테고리별 자료 위치 → 카테고리 칩 필터 자동 설정
-        if (cfg.cats) {
-            const catMap = { sermon: "catSermon", frag: "catFrag", devo: "catDevo", bible: "catBible", comm: "catComm" };
-            for (const k in catMap) {
-                if (cfg.cats[k]) gmc.set(catMap[k], String(cfg.cats[k]));
+
+        const slot = chooseSlot(cfg);
+        if (slot == null) return; // 취소 — 아무것도 저장하지 않음
+
+        // 이 슬롯 외에 이미 등록된 볼트가 있는지 (전역 설정 덮어쓰기 정책용)
+        let others = 0;
+        for (let i = 1; i <= 6; i++) {
+            if (i === slot) continue;
+            const si = slotInfo(i);
+            if (si.vault || (i !== 1 && si.port)) others++;
+        }
+
+        writeSlot(slot, cfg);
+
+        // 전역 설정(구절 노트 형식·카테고리 키워드): 첫 볼트면 그냥 적용, 다른 볼트가 있으면 확인 후 적용
+        if (cfg.bibleFormat || cfg.cats) {
+            const applyGlobal = others === 0 ||
+                window.confirm("이 설정 코드의 공통 설정(성경 노트 형식·카테고리 폴더 키워드)도 함께 적용할까요?\n(모든 볼트 검색에 공통으로 쓰이는 값입니다)");
+            if (applyGlobal) {
+                if (cfg.bibleFormat) gmc.set("bibleNoteFormat", String(cfg.bibleFormat));
+                if (cfg.cats) {
+                    const catMap = { sermon: "catSermon", frag: "catFrag", devo: "catDevo", bible: "catBible", comm: "catComm" };
+                    for (const k in catMap) {
+                        if (cfg.cats[k]) gmc.set(catMap[k], String(cfg.cats[k]));
+                    }
+                }
             }
         }
-        toast("설정 코드 적용 완료 — 새로고침합니다");
+
+        // 적용 결과 요약 — save가 페이지를 새로고침하므로 blocking alert를 먼저 띄운다
+        const lines = [];
+        for (let i = 1; i <= 6; i++) {
+            const si = slotInfo(i);
+            if (si.port && (si.vault || (si.i !== 1 && si.name))) lines.push(`  ${i}. ${si.name || si.vault} (포트 ${si.port})`);
+        }
+        alert(`설정 코드 적용 완료 — 슬롯 ${slot}에 저장했습니다.\n\n현재 등록된 볼트:\n${lines.join("\n")}\n\n확인을 누르면 페이지를 새로고침합니다.`);
         gmc.save(); // save 이벤트에서 location.reload()
     }
 
@@ -549,6 +618,30 @@
         });
     }
 
+    // 시맨틱 버전 비교: latest가 cur보다 새 버전인지
+    function isNewer(latest, cur) {
+        const a = String(latest).split(".").map(Number), b = String(cur).split(".").map(Number);
+        for (let i = 0; i < 3; i++) { const d = (a[i] || 0) - (b[i] || 0); if (d) return d > 0; }
+        return false;
+    }
+
+    // GitHub 배포본의 @version을 읽어온다 (진단 실행 시에만 호출 — 페이지 로드마다 아님). 실패 시 null.
+    function checkLatestVersion() {
+        return new Promise((resolve) => {
+            GM.xmlHttpRequest({
+                method: "GET",
+                url: UPDATE_URL,
+                timeout: S.requestTimeout,
+                onload: (r) => {
+                    const m = String(r.responseText || r.response || "").match(/@version\s+([\d.]+)/);
+                    resolve(m ? m[1] : null);
+                },
+                onerror: () => resolve(null),
+                ontimeout: () => resolve(null),
+            });
+        });
+    }
+
     // 🩺 연결 진단: 볼트별 Omnisearch / Local REST 상태를 한국어 체크리스트로 표시
     function runDiagnostics() {
         const ports = parsePorts();
@@ -559,24 +652,42 @@
         }
         list.html(`<span class="om-loading">연결 진단 중…</span>`);
         Promise.all(ports.map((cfg) => Promise.all([
-            fetchPort(cfg.port, "진단").then((r) => r !== null),
+            // 결과가 나올 법한 쿼리로 프로브 → 응답의 vault 필드로 "다른 볼트가 포트 점유" 판별
+            fetchPort(cfg.port, baseQuery() || cfg.dvault || "성경"),
             (S.useLocalRest && cfg.lrPort && cfg.lrKey) ? restCheck(cfg) : Promise.resolve(null),
         ]))).then((results) => {
-            const rows = results.map(([omniOk, rest], i) => {
+            const rows = results.map(([omni, rest], i) => {
                 const cfg = ports[i];
                 const name = escapeHtml(cfg.label || "볼트 " + (i + 1));
-                const omniLine = omniOk
-                    ? `✅ Omnisearch 연결됨 (포트 ${escapeHtml(cfg.port)})`
-                    : `❌ Omnisearch 연결 안 됨 (포트 ${escapeHtml(cfg.port)})<br /><span class="om-diag-fix">→ 옵시디언이 켜져 있는지 확인 후, A4P Helper 플러그인에서 [자동 설정]을 누르세요.</span>`;
+                const omniOk = omni !== null;
+                // 응답에 결과가 있으면 그 vault와 슬롯의 볼트명(dvault)을 비교 — 결과 0건이면 판별 불가(현행 ✅ 유지)
+                const actual = Array.isArray(omni) && omni[0] ? String(omni[0].vault || "") : "";
+                const mismatch = omniOk && actual && cfg.dvault && actual !== cfg.dvault;
+                let omniLine;
+                if (!omniOk) {
+                    omniLine = `❌ Omnisearch 연결 안 됨 (포트 ${escapeHtml(cfg.port)})<br /><span class="om-diag-fix">→ 옵시디언이 켜져 있는지 확인 후, A4P Helper 플러그인에서 [자동 설정]을 누르세요.</span>`;
+                } else if (mismatch) {
+                    omniLine = `⚠️ 포트 ${escapeHtml(cfg.port)}는 응답하지만 다른 볼트("${escapeHtml(actual)}")가 사용 중입니다<br /><span class="om-diag-fix">→ "${escapeHtml(cfg.dvault)}" 볼트에서 A4P Helper의 설정 코드를 다시 복사해 ⚡에 붙여넣으세요. (Omnisearch HTTP 포트는 볼트마다 달라야 합니다)</span>`;
+                } else {
+                    omniLine = `✅ Omnisearch 연결됨 (포트 ${escapeHtml(cfg.port)})`;
+                }
                 let restLine = "";
                 if (rest === null) restLine = `➖ Local REST API 미사용 (본문 미리보기·신학 칩 없이 동작)`;
                 else if (rest === "ok") restLine = `✅ Local REST API 연결됨 (본문 미리보기·신학 칩 사용 가능)`;
-                else if (rest === "auth") restLine = `⚠️ Local REST API 키가 맞지 않습니다<br /><span class="om-diag-fix">→ A4P Helper에서 설정 코드를 다시 복사해 ⚡ 버튼에 붙여넣으세요.</span>`;
+                else if (rest === "auth") restLine = `⚠️ Local REST API 키가 맞지 않습니다<br /><span class="om-diag-fix">→ A4P Helper에서 설정 코드를 다시 복사해 ⚡ 버튼에 붙여넣으세요. (다른 볼트가 이 포트를 쓰고 있을 수 있습니다)</span>`;
                 else restLine = `❌ Local REST API 연결 안 됨 (포트 ${escapeHtml(cfg.lrPort)})<br /><span class="om-diag-fix">→ A4P Helper 플러그인에서 [자동 설정]을 누르세요.</span>`;
                 return `<div class="om-diag-vault"><b>${name}</b><br />${omniLine}<br />${restLine}</div>`;
             }).join("");
-            list.html(`<div class="om-diag">${rows}<div class="om-diag-foot">진단을 닫으려면 ⟳ 새로고침을 누르세요.</div></div>`);
+            list.html(`<div class="om-diag">${rows}<div class="om-diag-foot">현재 버전 v${VERSION} <span class="om-diag-ver"></span><br />진단을 닫으려면 ⟳ 새로고침을 누르세요.</div></div>`);
             setCount(null);
+            checkLatestVersion().then((latest) => {
+                if (!latest) return; // 확인 실패 — 아무것도 표시 안 함
+                const el = list.find(".om-diag-ver");
+                if (!el.length) return;
+                el.html(isNewer(latest, VERSION)
+                    ? `· ⬆️ 새 버전 v${escapeHtml(latest)} — Tampermonkey 대시보드에서 [업데이트 확인]을 누르세요`
+                    : `· ✅ 최신 버전입니다`);
+            });
         });
     }
 
@@ -1135,7 +1246,7 @@
         return new Promise((resolve) => {
             GM.xmlHttpRequest({
                 method: "GET",
-                url: `http://localhost:${encodeURIComponent(port)}/search?q=${encodeURIComponent(query)}`,
+                url: `http://127.0.0.1:${encodeURIComponent(port)}/search?q=${encodeURIComponent(query)}`,
                 headers: { "Content-Type": "application/json" },
                 timeout: S.requestTimeout,
                 onload: (res) => {
@@ -1185,6 +1296,9 @@
             const merged = [];
             const addItems = (arr, cfg, isAux) => {
                 if (!Array.isArray(arr)) return;
+                // 응답별 정규화: 서로 다른 쿼리·볼트의 BM25 score는 스케일이 달라 직접 비교 불가 →
+                // 각 응답 안에서의 상대값(_rel 0..1)만 만들어 정렬·%바·minRel에 쓴다.
+                const respMax = Math.max(0, ...arr.map((it) => Number(it.score) || 0));
                 for (const it of arr) {
                     const key = (it.vault || "") + "|" + (it.path || "");
                     if (seen.has(key)) continue;
@@ -1195,6 +1309,7 @@
                     it._restPort = cfg.lrPort; // Local REST API port (may be "")
                     it._restKey = cfg.lrKey;   // Local REST API key (may be "")
                     it._aux = !!isAux;         // 성경구절 보조 쿼리로 들어온 결과
+                    it._rel = respMax > 0 ? (Number(it.score) || 0) / respMax : 0;
                     merged.push(it);
                 }
             };
@@ -1220,22 +1335,33 @@
         }
         if (state.type !== "all") v = v.filter((r) => matchType(r.path, state.type));
 
-        // 목회 카테고리 필터: 노트 경로에 카테고리 키워드가 포함되면 통과 (키워드는 설정에서 변경 가능)
+        // 목회 카테고리 필터: 노트의 "폴더 경로"에 카테고리 키워드가 포함되면 통과 (키워드는 설정에서 변경 가능)
+        // 파일명은 제외 — "300. Sermons/성경적 세계관.md"가 '성경' 칩에 걸리는 오분류 방지.
         if (state.cat !== "all") {
             const kws = S.catKeywords[state.cat] || [];
-            if (kws.length) v = v.filter((r) => kws.some((k) => String(r.path || "").toLowerCase().includes(k)));
+            if (kws.length) v = v.filter((r) => {
+                const dir = String(r.path || "").toLowerCase().replace(/\/[^/]*$/, "");
+                return kws.some((k) => dir.includes(k));
+            });
         }
 
-        state.topScore = Math.max(1, ...state.raw.map((r) => Number(r.score) || 0));
+        state.topScore = Math.max(1, ...state.raw.map((r) => Number(r.score) || 0)); // 렌더 폴백용
         if (state.minRel > 0) {
-            const cut = state.topScore * (state.minRel / 100);
-            v = v.filter((r) => (Number(r.score) || 0) >= cut);
+            v = v.filter((r) => (r._rel || 0) * 100 >= state.minRel); // 응답별 상대값 기준
         }
 
         if (state.sort === "name") {
             v.sort((a, b) => String(a.basename).localeCompare(String(b.basename)));
         } else if (state.sort === "vault") {
             v.sort((a, b) => String(a.vault).localeCompare(String(b.vault)) || (b.score - a.score));
+        } else if (state.bibleRef) {
+            // 성경구절 검색: 메인/보조(aux)는 score 스케일이 달라 그룹으로 나눠 배치.
+            // 순수 구절 쿼리("요 3:16")는 구절노트·인용노트(aux)가 본론이라 먼저, 혼합 쿼리는 메인 먼저.
+            const auxFirst = state.bibleRef.refOnly ? 1 : 0;
+            v.sort((a, b) =>
+                (auxFirst ? (b._aux ? 1 : 0) - (a._aux ? 1 : 0) : (a._aux ? 1 : 0) - (b._aux ? 1 : 0))
+                || (b._rel || 0) - (a._rel || 0)
+                || (Number(b.score) || 0) - (Number(a.score) || 0));
         } else {
             v.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
         }
@@ -1502,7 +1628,7 @@
 
         state.view.forEach((item, i) => {
             const url = openUrl(item);
-            const pct = Math.round(((Number(item.score) || 0) / state.topScore) * 100);
+            const pct = Math.round((item._rel != null ? item._rel : (Number(item.score) || 0) / state.topScore) * 100);
             const vaultName = item._label || item.vault;
             // 볼트 자동색(이름 해시)은 볼트가 2개 이상일 때만 구분 용도로 쓴다.
             // 단일 볼트에서는 슬롯에 Color hex를 직접 지정한 경우에만 색을 입힘 — 아니면 브랜드 테마색.

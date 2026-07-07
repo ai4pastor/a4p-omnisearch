@@ -78,14 +78,18 @@ async function patchAndRestart(app: App, id: string, patch: Record<string, unkno
 	}
 }
 
-/** Omnisearch HTTP 서버 켜기 (수강생 원클릭용) */
-export async function enableOmnisearchHttp(app: App): Promise<boolean> {
-	return patchAndRestart(app, OMNI_ID, { httpApiEnabled: true });
+/** Omnisearch HTTP 서버 켜기 (+선택적으로 포트 변경). Omnisearch는 포트를 문자열로 저장한다. */
+export async function setOmnisearchHttp(app: App, port?: number): Promise<boolean> {
+	const patch: Record<string, unknown> = { httpApiEnabled: true };
+	if (port !== undefined) patch.httpApiPort = String(port);
+	return patchAndRestart(app, OMNI_ID, patch);
 }
 
-/** Local REST API 비암호화 HTTP 서버 켜기 (수강생 원클릭용) */
-export async function enableRestHttp(app: App): Promise<boolean> {
-	return patchAndRestart(app, REST_ID, { enableInsecureServer: true });
+/** Local REST API 비암호화 HTTP 서버 켜기 (+선택적으로 포트 변경). insecurePort는 숫자로 저장한다. */
+export async function setRestHttp(app: App, port?: number): Promise<boolean> {
+	const patch: Record<string, unknown> = { enableInsecureServer: true };
+	if (port !== undefined) patch.insecurePort = port;
+	return patchAndRestart(app, REST_ID, patch);
 }
 
 /** 커뮤니티 플러그인 설치 화면 열기 (미설치 플러그인 안내) */

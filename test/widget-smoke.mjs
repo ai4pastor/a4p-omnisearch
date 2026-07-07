@@ -1,9 +1,11 @@
-// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 56케이스
+// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 77케이스
 // 실행 준비: npm install   (레포 루트에서 — devDependencies: jsdom, jquery)
 // 실행:      npm test  (파서 테스트 포함)  또는  node test/widget-smoke.mjs
 // 검증 범위: 4개 엔진 마운트 위치, 에디토리얼 스킨/테마 클래스, 카테고리 칩,
 //            결과 렌더, ◐ 모드 순환(auto→light→dark)·GM 저장, SVG 아이콘 7종,
 //            비검색 페이지(유튜브 watch, 구글 지도·이미지·홈) 미생성 가드.
+// v1.3.0 추가: 메타블록 정적 검사, 127.0.0.1 통일, 멀티볼트 설정 코드 슬롯 선택(5종),
+//            refOnly 그룹 정렬·응답별 정규화, 카테고리 디렉토리 매칭, 진단 볼트 불일치·버전 표시.
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import { createRequire } from "module";
@@ -99,6 +101,177 @@ for (const sc of SCENARIOS) {
   check("모드 순환 auto→light→dark→auto", autoStart && lightOn && darkOn && backToAuto);
   check("모드가 GM 저장소에 기억됨", store.om_mode === "auto");
   check("헤더 아이콘이 SVG로 렌더됨", widget.querySelectorAll(".om-h-actions .om-icon-btn svg").length === 7);
+}
+
+// ================================================================
+// v1.3.0 신규 케이스: 메타블록 정적 검사, 127.0.0.1 통일, 멀티볼트 온보딩(슬롯 선택),
+// refOnly 그룹 정렬 + 응답별 정규화, 카테고리 디렉토리 매칭, 진단 볼트 불일치 + 버전 표시
+// ================================================================
+
+console.log("\n[정적 검사] 메타블록");
+check("첫 줄이 // ==UserScript== (use strict 없음)", SRC.startsWith("// ==UserScript=="));
+{
+  const metaVer = (SRC.match(/@version\s+([\d.]+)/) || [])[1];
+  const constVer = (SRC.match(/const VERSION = "([\d.]+)"/) || [])[1];
+  check(`@version(${metaVer}) === VERSION 상수(${constVer})`, !!metaVer && metaVer === constVer);
+}
+check("@connect raw.githubusercontent.com 존재", /@connect\s+raw\.githubusercontent\.com/.test(SRC));
+
+// ---- 확장 스텁 환경 빌더 (GM_config set/save 기록 + prompt/confirm/alert 스텁 + XHR url 기록) ----
+async function makeEnv(opts = {}) {
+  const url = opts.url || "https://www.google.com/search?q=" + encodeURIComponent(opts.q || "사랑");
+  const dom = new JSDOM(`<!doctype html><html><head></head><body><div id="rcnt"><div id="rhs"></div></div></body></html>`,
+    { url, runScripts: "outside-only", pretendToBeVisual: true });
+  const { window } = dom;
+  const calls = { xhrUrls: [], sets: [], saves: 0, order: [], confirms: 0, lastAlert: "" };
+  const gmStore = {};
+  window.GM = {
+    getValue: (k, d) => Promise.resolve(k in gmStore ? gmStore[k] : d),
+    setValue: (k, v) => { gmStore[k] = v; },
+    xmlHttpRequest: (o) => {
+      calls.xhrUrls.push(o.url);
+      setTimeout(() => {
+        if (/raw\.githubusercontent\.com/.test(o.url)) {
+          o.onload({ responseText: opts.latestVersion ? `// @version      ${opts.latestVersion}\n` : "", response: "" });
+        } else {
+          o.onload({ response: opts.respond ? opts.respond(o.url) : FAKE_RESULTS });
+        }
+      }, 0);
+    },
+  };
+  window.GM_getValue = (k, d) => (k in gmStore ? gmStore[k] : d);
+  window.GM_setValue = (k, v) => { gmStore[k] = v; };
+  window.TextDecoder = TextDecoder; // jsdom 창에 없을 수 있어 Node 전역 주입
+  window.TextEncoder = TextEncoder;
+  const jqSrc2 = fs.readFileSync(require.resolve("jquery"), "utf8");
+  window.eval(jqSrc2);
+  const defaults = {};
+  const cfgStore = Object.assign({}, opts.gmValues || {});
+  window.GM_config = function (cfg) {
+    for (const [k, f] of Object.entries(cfg.fields || {})) defaults[k] = f.default;
+    return {
+      isInit: true,
+      get: (k) => (k in cfgStore ? cfgStore[k] : defaults[k]),
+      set: (k, v) => { cfgStore[k] = v; calls.sets.push([k, v]); calls.order.push("set:" + k); },
+      save: () => { calls.saves++; calls.order.push("save"); }, // 실물과 달리 reload하지 않음 (jsdom)
+      open: () => {}, init: () => {},
+    };
+  };
+  window.waitForKeyElements = () => {};
+  const promptQueue = (opts.prompts || []).slice();
+  window.prompt = () => (promptQueue.length ? promptQueue.shift() : null);
+  window.confirm = () => { calls.confirms++; return opts.confirmResult !== undefined ? opts.confirmResult : true; };
+  window.alert = (msg) => { calls.order.push("alert"); calls.lastAlert = String(msg); };
+  const body2 = SRC.slice(SRC.indexOf("==/UserScript=="));
+  const script2 = body2.slice(body2.indexOf("\n") + 1);
+  window.eval(`(function(){ const GM = window.GM; ${script2} })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  return { window, $: window.jQuery, calls, cfgStore };
+}
+
+const makeCode = (payload) =>
+  "A4P1:" + Buffer.from(JSON.stringify({ v: 1, ...payload }), "utf8").toString("base64")
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const clickBolt = (env) => env.$(`#OmnisearchObsidianResults .om-setup-code`).trigger("click");
+
+console.log("\n[네트워크] 검색 요청 호스트");
+{
+  const env = await makeEnv({ q: "사랑" });
+  check("fetchPort가 127.0.0.1 사용", env.calls.xhrUrls.length > 0 && env.calls.xhrUrls.every((u) => /^http:\/\/127\.0\.0\.1:/.test(u)));
+}
+
+console.log("\n[멀티볼트 온보딩] 설정 코드 슬롯 선택");
+{
+  // 첫 볼트: 슬롯1이 기본값(port 51361, vault 공백)이어도 빈 슬롯으로 간주 → v1에 저장, 전역 설정은 confirm 없이 적용
+  const env = await makeEnv({ prompts: [makeCode({ vault: "VaultA", omniPort: "51361", bibleFormat: "{약어}{장}_{절}", cats: { sermon: "설교" } })] });
+  clickBolt(env);
+  check("첫 코드 → 슬롯1에 저장 (기본값 특례)", env.cfgStore.v1_vault === "VaultA");
+  check("첫 볼트는 confirm 없이 전역 설정 적용", env.calls.confirms === 0 && env.cfgStore.bibleNoteFormat === "{약어}{장}_{절}");
+  check("요약 alert가 save보다 먼저", env.calls.order.indexOf("alert") >= 0 && env.calls.order.indexOf("alert") < env.calls.order.indexOf("save"));
+  check("alert에 등록 볼트 목록 포함", env.calls.lastAlert.includes("VaultA"));
+}
+{
+  // 두 번째 볼트: v1 점유 → 첫 빈 슬롯 v2로. confirm(false) → 전역 설정 미변경
+  const env = await makeEnv({
+    gmValues: { v1_port: "51361", v1_vault: "VaultA", v1_name: "A" },
+    prompts: [makeCode({ vault: "VaultB", omniPort: "51362", cats: { sermon: "다른설교" } })],
+    confirmResult: false,
+  });
+  clickBolt(env);
+  check("두 번째 코드 → 빈 슬롯 v2에 저장", env.cfgStore.v2_vault === "VaultB" && env.cfgStore.v1_vault === "VaultA");
+  check("confirm 거절 시 전역 설정 미변경", env.calls.confirms === 1 && env.cfgStore.catSermon === undefined);
+}
+{
+  // 같은 볼트 재붙여넣기 → 기존 슬롯 갱신 (중복 등록 없음)
+  const env = await makeEnv({
+    gmValues: { v1_port: "51361", v1_vault: "VaultA", v2_port: "51362", v2_vault: "VaultB", v2_lrKey: "oldkey" },
+    prompts: [makeCode({ vault: "VaultB", omniPort: "51999" })],
+  });
+  clickBolt(env);
+  check("같은 볼트 → 해당 슬롯 갱신 (v2 포트 교체)", env.cfgStore.v2_port === "51999" && env.cfgStore.v1_port === "51361");
+  check("교체 시 잔여값 정리 (이전 lrKey 제거)", env.cfgStore.v2_lrKey === "");
+}
+{
+  // 6슬롯 만석 → prompt로 교체 슬롯 선택
+  const full = {};
+  for (let i = 1; i <= 6; i++) { full[`v${i}_port`] = String(51360 + i); full[`v${i}_vault`] = "V" + i; }
+  const env = await makeEnv({ gmValues: full, prompts: [makeCode({ vault: "New", omniPort: "52000" }), "3"] });
+  clickBolt(env);
+  check("만석 + 슬롯 '3' 선택 → v3 교체", env.cfgStore.v3_vault === "New");
+  const env2 = await makeEnv({ gmValues: full, prompts: [makeCode({ vault: "New", omniPort: "52000" }), null] });
+  clickBolt(env2);
+  check("만석 + 취소 → 아무것도 저장 안 함", env2.calls.sets.length === 0 && env2.calls.saves === 0);
+}
+
+console.log("\n[검색 정확도] refOnly 그룹 정렬 + 응답별 정규화");
+{
+  const mainResp = JSON.stringify([
+    { score: 50, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "요 3 16 언급" },
+    { score: 25, vault: "csh_remote", path: "300. Sermons/설교B.md", basename: "설교B", excerpt: "…" },
+  ]);
+  const auxResp = JSON.stringify([
+    { score: 200, vault: "csh_remote", path: "1000. 성경/요3_16.md", basename: "요3_16", excerpt: "하나님이 세상을…" },
+  ]);
+  const respond = (u) => (decodeURIComponent(u).includes("요3_16") ? auxResp : mainResp);
+  const env = await makeEnv({ q: "요 3:16", respond });
+  const titles = env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title").text()).get();
+  check("순수 구절 검색 → 구절노트(aux)가 최상단", titles[0] === "요3_16");
+  const html = env.$(`#OmnisearchObsidianResults .om-list`).html() || "";
+  check("메인 그룹 % 바가 자기 그룹 기준 (설교B=50%)", html.includes("50%"));
+  const env2 = await makeEnv({ q: "요 3:16 은혜", respond });
+  const titles2 = env2.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env2.$(el).find(".om-title").text()).get();
+  check("혼합 쿼리 → 메인 결과가 먼저, aux는 뒤", titles2[0] === "설교A" && titles2.indexOf("요3_16") > titles2.indexOf("설교B"));
+}
+
+console.log("\n[카테고리] 디렉토리 경로만 매칭 (파일명 오분류 방지)");
+{
+  const resp = JSON.stringify([
+    { score: 10, vault: "csh_remote", path: "300. Sermons/성경적 세계관.md", basename: "성경적 세계관", excerpt: "…" },
+    { score: 8, vault: "csh_remote", path: "1000. 성경/요3_16.md", basename: "요3_16", excerpt: "…" },
+  ]);
+  const env = await makeEnv({ q: "세계관", respond: () => resp });
+  env.$(`#OmnisearchObsidianResults .om-cat[data-v="bible"]`).trigger("click");
+  const titles = env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title").text()).get();
+  check("'성경' 칩: 폴더만 매칭 (파일명 '성경적 세계관' 제외)", titles.length === 1 && titles[0] === "요3_16");
+}
+
+console.log("\n[진단] 볼트 불일치 경고 + 버전 표시");
+{
+  const otherResp = JSON.stringify([
+    { score: 5, vault: "other_vault", path: "note.md", basename: "note", excerpt: "…" },
+  ]);
+  const env = await makeEnv({
+    q: "사랑",
+    gmValues: { v1_port: "51361", v1_vault: "csh_remote" },
+    respond: () => otherResp,
+    latestVersion: "9.9.9",
+  });
+  env.$(`#OmnisearchObsidianResults .om-diagnose`).trigger("click");
+  await new Promise((r) => setTimeout(r, 200));
+  const diag = env.$(`#OmnisearchObsidianResults .om-list`).html() || "";
+  check("다른 볼트가 포트 점유 → ⚠️ 경고", diag.includes("다른 볼트") && diag.includes("other_vault"));
+  check("진단에 현재 버전 표시", diag.includes("현재 버전 v"));
+  check("새 버전 안내 (9.9.9 스텁)", diag.includes("새 버전 v9.9.9"));
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

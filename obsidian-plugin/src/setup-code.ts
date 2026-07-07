@@ -1,6 +1,7 @@
 import { App, FileSystemAdapter } from "obsidian";
 import { checkStatus, DepStatus } from "./status";
-import type { CategoryPaths } from "./main";
+import type { CategoryFolders, CategoryPaths } from "./main";
+import { CATEGORY_KEYS } from "./main";
 
 /**
  * 브라우저 유저스크립트(⚡ 버튼)에 붙여넣는 설정 코드 페이로드.
@@ -27,10 +28,17 @@ export function encodeSetupCode(payload: SetupPayload): string {
 	return "A4P1:" + b64;
 }
 
+/** 내부 저장(배열) → 설정 코드 wire format(콤마 문자열) 직렬화. 유저스크립트 하위호환 — v:1 유지. */
+function catsToWire(cats: CategoryFolders): CategoryPaths {
+	const out = {} as CategoryPaths;
+	for (const k of CATEGORY_KEYS) out[k] = (cats[k] ?? []).map((s) => s.trim()).filter(Boolean).join(",");
+	return out;
+}
+
 export async function buildSetupCode(
 	app: App,
 	bibleFormat: string,
-	cats?: CategoryPaths
+	cats?: CategoryFolders
 ): Promise<{ code: string; status: DepStatus }> {
 	const status = await checkStatus(app);
 	const adapter = app.vault.adapter;
@@ -41,7 +49,7 @@ export async function buildSetupCode(
 		omniPort: status.omniPort,
 		bibleFormat: bibleFormat || "{약어}{장}_{절}",
 	};
-	if (cats) payload.cats = cats;
+	if (cats) payload.cats = catsToWire(cats);
 	if (status.restHttp && status.restKey) {
 		payload.restPort = status.restPort;
 		payload.restKey = status.restKey;

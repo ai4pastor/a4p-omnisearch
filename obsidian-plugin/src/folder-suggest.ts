@@ -1,23 +1,23 @@
 import { AbstractInputSuggest, App, TFolder } from "obsidian";
 
 /**
- * 폴더 경로 자동완성 — 콤마로 여러 폴더를 넣는 필드용.
- * 마지막 콤마 뒤의 조각만 검색어로 쓰고, 선택하면 그 조각을 실제 폴더 경로로 교체한다.
+ * 폴더 경로 자동완성 — 폴더 하나를 담는 입력창용 (행 단위 UI).
+ * 선택하면 입력값 전체를 폴더 경로로 교체하고 input 이벤트를 쏴서
+ * TextComponent.onChange 한 경로로만 저장되게 한다 (저장 로직 이중화 방지).
  */
 export class FolderSuggest extends AbstractInputSuggest<TFolder> {
 	constructor(
 		app: App,
-		private textInputEl: HTMLInputElement,
-		private onPick: (value: string) => void
+		private textInputEl: HTMLInputElement
 	) {
 		super(app, textInputEl);
 	}
 
 	getSuggestions(query: string): TFolder[] {
-		const seg = (query.split(",").pop() ?? "").trim().toLowerCase();
+		const q = query.trim().toLowerCase();
 		const out: TFolder[] = [];
 		for (const f of this.app.vault.getAllLoadedFiles()) {
-			if (f instanceof TFolder && f.path !== "/" && f.path.toLowerCase().includes(seg)) {
+			if (f instanceof TFolder && f.path !== "/" && f.path.toLowerCase().includes(q)) {
 				out.push(f);
 				if (out.length >= 50) break;
 			}
@@ -30,11 +30,8 @@ export class FolderSuggest extends AbstractInputSuggest<TFolder> {
 	}
 
 	selectSuggestion(folder: TFolder): void {
-		const parts = this.textInputEl.value.split(",");
-		parts[parts.length - 1] = folder.path;
-		const value = parts.map((s) => s.trim()).filter(Boolean).join(",");
-		this.textInputEl.value = value;
-		this.onPick(value);
+		this.textInputEl.value = folder.path;
+		this.textInputEl.dispatchEvent(new Event("input"));
 		this.close();
 	}
 }

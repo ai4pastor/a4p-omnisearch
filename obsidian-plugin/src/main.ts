@@ -1,31 +1,37 @@
 import { Notice, Plugin } from "obsidian";
 import { buildSetupCode } from "./setup-code";
-import { checkStatus } from "./status";
 import { A4PSettingTab } from "./settings-tab";
+import {
+	ProbeResult,
+	checkLiveStatus,
+	resolveOmniPortConflict,
+	resolveRestPortConflict,
+} from "./probe";
 
-/** 카테고리별 자료 위치 (콤마로 여러 폴더). 위젯의 카테고리 칩 필터에 사용된다. */
-export interface CategoryPaths {
-	sermon: string;
-	frag: string;
-	devo: string;
-	bible: string;
-	comm: string;
-}
+export type CategoryKey = "sermon" | "frag" | "devo" | "bible" | "comm";
+
+/** 내부 저장용: 카테고리별 폴더 목록 (행 단위 UI). */
+export type CategoryFolders = Record<CategoryKey, string[]>;
+
+/** 설정 코드 wire format: 콤마 join 문자열 (유저스크립트 하위호환). */
+export type CategoryPaths = Record<CategoryKey, string>;
+
+export const CATEGORY_KEYS: CategoryKey[] = ["sermon", "frag", "devo", "bible", "comm"];
 
 interface A4PSettings {
 	bibleFormat: string;
-	cats: CategoryPaths;
+	cats: CategoryFolders;
 	onboarded: boolean;
 }
 
 const DEFAULT_SETTINGS: A4PSettings = {
 	bibleFormat: "{약어}{장}_{절}",
 	cats: {
-		sermon: "설교",
-		frag: "설교조각,강의조각",
-		devo: "묵상,큐티,QT",
-		bible: "성경",
-		comm: "주석,강해",
+		sermon: ["설교"],
+		frag: ["설교조각", "강의조각"],
+		devo: ["묵상", "큐티", "QT"],
+		bible: ["성경"],
+		comm: ["주석", "강해"],
 	},
 	onboarded: false,
 };
@@ -54,11 +60,44 @@ export default class A4POmnisearchPlugin extends Plugin {
 			callback: () => void this.showStatus(),
 		});
 
+		// 멀티볼트 포트 충돌 자동 해결: 워크스페이스 준비 + 의존 플러그인 기동 대기 후 프로브.
+		// HTTP를 아직 안 켠 볼트(온보딩 전)에는 개입하지 않는다 — ⚡ 자동 설정을 누를 때만.
+		this.app.workspace.onLayoutReady(() => {
+			window.setTimeout(() => void this.autoResolveConflicts(), 4000);
+		});
+
 		// 첫 활성화 시 온보딩 안내
 		if (!this.settings.onboarded) {
 			this.settings.onboarded = true;
 			await this.saveSettings();
 			new Notice("A4P Omnisearch Helper가 켜졌습니다.\n설정 탭에서 체크리스트를 확인하고 [설정 코드 복사]를 눌러 주세요.", 8000);
+		}
+	}
+
+	/** 볼트 시작 시 포트 충돌을 감지하면 빈 포트로 자동 이동시킨다. */
+	private async autoResolveConflicts(): Promise<void> {
+		try {
+			const st = await checkLiveStatus(this.app);
+			let moved = false;
+			if (st.omniHttp && st.omniEnabled && st.omniProbe === "conflict") {
+				const r = await resolveOmniPortConflict(this.app);
+				if (r.ok) {
+					moved = true;
+					new Notice(`⚠️ 다른 볼트와 포트가 겹쳐 Omnisearch 포트를 ${r.port}(으)로 옮겼습니다.`, 12000);
+				}
+			}
+			if (st.restHttp && st.restEnabled && st.restProbe === "conflict") {
+				const r = await resolveRestPortConflict(this.app);
+				if (r.ok) {
+					moved = true;
+					new Notice(`⚠️ 다른 볼트와 포트가 겹쳐 Local REST 포트를 ${r.port}(으)로 옮겼습니다.`, 12000);
+				}
+			}
+			if (moved) {
+				new Notice("📋 포트가 바뀌었습니다 — 설정 코드를 다시 복사해 브라우저 위젯 ⚡에 붙여넣어 주세요.", 15000);
+			}
+		} catch {
+			// 자동 점검 실패는 조용히 넘어감 — 설정 탭 재검사로 언제든 확인 가능
 		}
 	}
 
@@ -74,14 +113,17 @@ export default class A4POmnisearchPlugin extends Plugin {
 	}
 
 	async showStatus(): Promise<void> {
-		const st = await checkStatus(this.app);
+		const st = await checkLiveStatus(this.app);
 		const mark = (b: boolean) => (b ? "✅" : "❌");
+		const probeMark = (p: ProbeResult) => (p === "ok" ? "✅" : p === "down" ? "❌" : "⚠️");
+		const probeText = (p: ProbeResult) =>
+			p === "ok" ? "응답 확인" : p === "conflict" ? "다른 볼트가 포트 사용 중" : p === "unknown" ? "응답 확인 불가" : "응답 없음";
 		new Notice(
 			[
 				`${mark(st.omniInstalled)} Omnisearch 설치`,
-				`${mark(st.omniHttp && st.omniEnabled)} Omnisearch HTTP 서버 (포트 ${st.omniPort})`,
+				`${probeMark(st.omniProbe)} Omnisearch HTTP 서버 (포트 ${st.omniPort}) — ${probeText(st.omniProbe)}`,
 				`${mark(st.restInstalled)} Local REST API 설치 (선택)`,
-				`${mark(st.restHttp && st.restEnabled)} Local REST HTTP 서버 (포트 ${st.restPort})`,
+				`${probeMark(st.restProbe)} Local REST HTTP 서버 (포트 ${st.restPort}) — ${probeText(st.restProbe)}`,
 				"자세한 해결은 설정 탭 → A4P Omnisearch Helper",
 			].join("\n"),
 			10000
@@ -89,11 +131,21 @@ export default class A4POmnisearchPlugin extends Plugin {
 	}
 
 	async loadSettings(): Promise<void> {
-		const data = ((await this.loadData()) ?? {}) as Partial<A4PSettings>;
+		const data = ((await this.loadData()) ?? {}) as Partial<A4PSettings> & { cats?: unknown };
+		// cats 마이그레이션: 구버전 콤마 문자열·신버전 배열 어느 쪽이 와도 배열로 흡수
+		const toArr = (v: unknown): string[] | null =>
+			Array.isArray(v)
+				? v.map(String).map((s) => s.trim()).filter(Boolean)
+				: typeof v === "string"
+					? v.split(",").map((s) => s.trim()).filter(Boolean)
+					: null;
+		const rawCats = (data.cats ?? {}) as Record<string, unknown>;
+		const cats = {} as CategoryFolders;
+		for (const k of CATEGORY_KEYS) cats[k] = toArr(rawCats[k]) ?? [...DEFAULT_SETTINGS.cats[k]];
 		this.settings = {
 			...DEFAULT_SETTINGS,
 			...data,
-			cats: { ...DEFAULT_SETTINGS.cats, ...(data.cats ?? {}) },
+			cats,
 		};
 	}
 

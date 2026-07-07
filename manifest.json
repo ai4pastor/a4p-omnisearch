@@ -1,9 +1,9 @@
 {
   "id": "a4p-omnisearch",
   "name": "A4P Omnisearch Helper",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "minAppVersion": "1.5.0",
-  "description": "A4P 통합검색(구글·네이버·Bing·유튜브 옆에 내 볼트 검색) 설정 도우미 — Omnisearch·Local REST API 상태 진단, 원클릭 자동 설정, 브라우저용 설정 코드 생성.",
+  "description": "A4P 통합검색(구글·네이버·Bing·유튜브 옆에 내 볼트 검색) 설정 도우미 — Omnisearch·Local REST API 상태 진단, 원클릭 자동 설정, 멀티볼트 포트 충돌 자동 해결, 브라우저용 설정 코드 생성.",
   "author": "abadcsh",
   "authorUrl": "https://ai4pastor.com",
   "isDesktopOnly": true

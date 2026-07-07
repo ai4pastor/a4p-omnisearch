@@ -16,3 +16,45 @@
 	text-align: center;
 	padding: 10px 0;
 }
+
+/* 카테고리 폴더 행 UI */
+.a4p-cat-section {
+	margin-bottom: 4px;
+}
+
+.a4p-folder-row {
+	border-top: none;
+	padding-top: 2px;
+	padding-bottom: 2px;
+}
+
+.a4p-folder-row .setting-item-info {
+	display: none; /* 이름 칸 없이 입력창+삭제 버튼만 */
+}
+
+.a4p-folder-row .setting-item-control {
+	justify-content: flex-start;
+	gap: 6px;
+}
+
+.a4p-folder-input {
+	width: 100%;
+	max-width: 420px;
+}
+
+.a4p-cat-empty {
+	margin: 0 0 8px;
+	font-size: 0.85em;
+}
+
+/* 고급 — 포트 직접 지정 */
+.a4p-advanced {
+	margin: 8px 0 6px;
+}
+
+.a4p-advanced summary {
+	cursor: pointer;
+	color: var(--text-muted);
+	font-size: 0.9em;
+	padding: 4px 0;
+}

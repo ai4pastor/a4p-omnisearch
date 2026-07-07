@@ -69,5 +69,26 @@ check("옵시디언 강의", null, "숫자 없는 문장 거부");
 check("사랑과 은혜", null, "성경 참조 없는 검색어");
 check("롬 8장", { abbr: "롬", chapter: 8, verse: null, verseEnd: null, first: "롬8_1", count: 1 }, "'장' 마커가 있으면 장 단위 허용");
 
+// v1.3.0: refOnly(쿼리가 구절 참조뿐인지) + 장 단위 prefix 보조 쿼리
+function checkField(query, field, expected, label) {
+    const r = parseBibleRef(query, "{약어}{장}_{절}");
+    const got = r === null ? null : r[field];
+    const ok = JSON.stringify(got) === JSON.stringify(expected);
+    if (ok) { pass++; console.log(`  ✅ ${label}: "${query}"`); }
+    else {
+        fail++;
+        console.log(`  ❌ ${label}: "${query}"\n     기대: ${JSON.stringify(expected)}\n     실제: ${JSON.stringify(got)}`);
+    }
+}
+
+console.log("— refOnly (순수 구절 검색 판별) —");
+checkField("요 3:16", "refOnly", true, "구절만 → refOnly=true");
+checkField("요 3:16 은혜", "refOnly", false, "구절+키워드 → refOnly=false");
+
+console.log("— 보조 쿼리 (장 단위 prefix 확장) —");
+checkField("시편 23편", "auxQueries", ["시23_", "시23_1", "시23"], "장 단위 → prefix 후보 포함 3개");
+checkField("요3_16", "auxQueries", ["요3_16"], "절 단위 → 노트명 그대로 (회귀 가드)");
+checkField("롬 3:10-12", "auxQueries", ["롬3_10", "롬3_11", "롬3_12"], "범위 → 절별 분리 (회귀 가드)");
+
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
 process.exit(fail ? 1 : 0);
