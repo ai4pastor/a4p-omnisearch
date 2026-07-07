@@ -73,7 +73,7 @@ async function checkStatus(app) {
   };
 }
 async function patchAndRestart(app, id, patch) {
-  var _a, _b;
+  var _a, _b, _c, _d, _e;
   const reg = pluginRegistry(app);
   if (!((_a = reg == null ? void 0 : reg.manifests) == null ? void 0 : _a[id]) && await readPluginData(app, id) === null)
     return false;
@@ -83,9 +83,17 @@ async function patchAndRestart(app, id, patch) {
       await reg.disablePlugin(id);
     await patchPluginData(app, id, patch);
     await reg.enablePlugin(id);
-    return true;
+    if (!((_c = reg.plugins) == null ? void 0 : _c[id])) {
+      await new Promise((r) => window.setTimeout(r, 500));
+      await reg.enablePlugin(id);
+    }
+    return !!((_d = reg.plugins) == null ? void 0 : _d[id]);
   } catch (e) {
-    return false;
+    try {
+      await reg.enablePlugin(id);
+    } catch (e2) {
+    }
+    return !!((_e = reg.plugins) == null ? void 0 : _e[id]);
   }
 }
 async function setOmnisearchHttp(app, port) {
@@ -175,10 +183,11 @@ var FolderSuggest = class extends import_obsidian2.AbstractInputSuggest {
 // src/probe.ts
 var import_obsidian3 = require("obsidian");
 var withTimeout = (p, ms = 3e3) => Promise.race([p, new Promise((r) => window.setTimeout(() => r("timeout"), ms))]);
-async function omniSearchOnce(port, query) {
+async function omniSearchOnce(port, query, timeoutMs) {
   try {
     const res = await withTimeout(
-      (0, import_obsidian3.requestUrl)({ url: `http://localhost:${port}/search?q=${encodeURIComponent(query)}`, throw: false })
+      (0, import_obsidian3.requestUrl)({ url: `http://localhost:${port}/search?q=${encodeURIComponent(query)}`, throw: false }),
+      timeoutMs
     );
     if (res === "timeout")
       return "down";
@@ -190,14 +199,14 @@ async function omniSearchOnce(port, query) {
     return "down";
   }
 }
-async function probeOmnisearch(app, port) {
+async function probeOmnisearch(app, port, timeoutMs = 3e3) {
   var _a, _b;
   const myVault = app.vault.getName();
   const files = app.vault.getMarkdownFiles();
   const queries = [(_a = files[0]) == null ? void 0 : _a.basename, (_b = files[1]) == null ? void 0 : _b.basename, myVault].filter(Boolean);
   let sawEmpty = false;
   for (const q of queries.slice(0, 3)) {
-    const r = await omniSearchOnce(port, q);
+    const r = await omniSearchOnce(port, q, timeoutMs);
     if (r === "down")
       return "down";
     if (r === "unknown")
@@ -270,36 +279,49 @@ async function resolveConflict(app, spec) {
   const cur = spec.getPort(st);
   const first = await spec.probe(app, st);
   if (first === "ok")
-    return { ok: true, port: cur };
-  if (first === "down" && await isPortFree(cur)) {
-    if (await spec.apply(app)) {
-      for (let i = 0; i < 3; i++) {
-        await sleep(1e3);
-        if (await spec.probe(app, await checkStatus(app)) === "ok")
-          return { ok: true, port: cur };
-      }
+    return { ok: true, port: cur, moved: false };
+  if (first === "unknown")
+    return { ok: false, port: cur, moved: false, reason: "unknown" };
+  const waitAlive = async () => {
+    let last = "down";
+    for (let i = 0; i < 5; i++) {
+      await sleep(1500);
+      last = await spec.probe(app, await checkStatus(app), 8e3);
+      if (last !== "down")
+        break;
     }
-  }
-  let searchFrom = cur + 1;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const next = await findFreePort(searchFrom, spec.skipPorts(st));
-    if (next === null)
-      break;
-    if (await spec.apply(app, next)) {
-      for (let i = 0; i < 3; i++) {
-        await sleep(1e3);
-        if (await spec.probe(app, await checkStatus(app)) === "ok")
-          return { ok: true, port: next };
+    return last;
+  };
+  if (first === "down") {
+    if (await isPortFree(cur)) {
+      if (await spec.apply(app)) {
+        const r2 = await waitAlive();
+        if (r2 === "ok" || r2 === "unknown")
+          return { ok: true, port: cur, moved: false };
       }
+      return { ok: false, port: cur, moved: false, reason: "restart" };
     }
-    searchFrom = next + 1;
+    await sleep(3e3);
+    const again = await spec.probe(app, st, 8e3);
+    if (again === "ok")
+      return { ok: true, port: cur, moved: false };
+    if (again === "unknown")
+      return { ok: false, port: cur, moved: false, reason: "unknown" };
   }
-  return { ok: false, port: cur };
+  const next = await findFreePort(cur + 1, spec.skipPorts(st));
+  if (next === null)
+    return { ok: false, port: cur, moved: false, reason: "nofree" };
+  if (!await spec.apply(app, next))
+    return { ok: false, port: cur, moved: false, reason: "failed" };
+  const r = await waitAlive();
+  if (r === "ok" || r === "unknown")
+    return { ok: true, port: next, moved: true };
+  return { ok: false, port: next, moved: true, reason: "restart" };
 }
 function resolveOmniPortConflict(app) {
   return resolveConflict(app, {
     getPort: (st) => Number(st.omniPort),
-    probe: (app2, st) => probeOmnisearch(app2, st.omniPort),
+    probe: (app2, st, t) => probeOmnisearch(app2, st.omniPort, t),
     apply: (app2, port) => setOmnisearchHttp(app2, port),
     skipPorts: (st) => [st.restPort, 27124]
   });
@@ -465,14 +487,29 @@ var A4PSettingTab = class extends import_obsidian4.PluginSettingTab {
         );
       }
     };
+    const reportOutcome = (name, r) => {
+      if (r.ok) {
+        new import_obsidian4.Notice(`${name} \uC815\uC0C1 \uD655\uC778 \u2705 (\uD3EC\uD2B8 ${r.port})`);
+      } else if (r.reason === "restart") {
+        new import_obsidian4.Notice(`${name}: \uC124\uC815\uC740 \uC644\uB8CC\uB410\uC9C0\uB9CC \uC11C\uBC84\uAC00 \uC544\uC9C1 \uC548 \uB5B4\uC2B5\uB2C8\uB2E4.
+\u{1F501} \uC635\uC2DC\uB514\uC5B8\uC744 \uC7AC\uC2DC\uC791\uD55C \uB4A4 [\u{1F504} \uC7AC\uAC80\uC0AC]\uB97C \uB20C\uB7EC \uC8FC\uC138\uC694.
+(Omnisearch\uAC00 \uCE90\uC2DC\uB97C \uB2E4\uC2DC \uB9CC\uB4DC\uB294 \uC911\uC77C \uC218 \uC788\uC2B5\uB2C8\uB2E4)`, 12e3);
+      } else if (r.reason === "unknown") {
+        new import_obsidian4.Notice(`${name}: \uC11C\uBC84\uAC00 \uC751\uB2F5 \uC911\uC785\uB2C8\uB2E4 \u2014 \uC778\uB371\uC2F1\uC774 \uB05D\uB098\uAE30\uB97C \uAE30\uB2E4\uB838\uB2E4\uAC00 [\u{1F504} \uC7AC\uAC80\uC0AC]\uB97C \uB20C\uB7EC \uC8FC\uC138\uC694.`, 8e3);
+      } else if (r.reason === "nofree") {
+        new import_obsidian4.Notice(`${name}: \uBE48 \uD3EC\uD2B8\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4 \u2014 \uC544\uB798 [\uACE0\uAE09]\uC5D0\uC11C \uD3EC\uD2B8\uB97C \uC9C1\uC811 \uC9C0\uC815\uD574 \uC8FC\uC138\uC694.`, 8e3);
+      } else {
+        new import_obsidian4.Notice(`${name}: \uC790\uB3D9 \uC124\uC815 \uC2E4\uD328 \u2014 \uD574\uB2F9 \uD50C\uB7EC\uADF8\uC778 \uC124\uC815\uC5D0\uC11C \uC9C1\uC811 \uCF1C\uAC70\uB098 \uC635\uC2DC\uB514\uC5B8\uC744 \uC7AC\uC2DC\uC791\uD574 \uC8FC\uC138\uC694.`, 8e3);
+      }
+      if (r.moved)
+        this.notifyPortChanged();
+    };
     const probeRow = (name, probe, flagOn, port, okDesc, resolve) => {
+      const fix = async () => {
+        reportOutcome(name, await resolve());
+      };
       if (!flagOn && probe !== "conflict") {
-        row("\u274C", `${name} (\uD3EC\uD2B8 ${port})`, "HTTP \uC11C\uBC84\uAC00 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4. \uC790\uB3D9 \uC124\uC815\uC73C\uB85C \uCF1C\uC138\uC694.", "\u26A1 \uC790\uB3D9 \uC124\uC815", async () => {
-          const r = await resolve();
-          new import_obsidian4.Notice(r.ok ? `${name}\uB97C \uCF30\uC2B5\uB2C8\uB2E4 \u2705 (\uD3EC\uD2B8 ${r.port})` : "\uC790\uB3D9 \uC124\uC815 \uC2E4\uD328 \u2014 \uD574\uB2F9 \uD50C\uB7EC\uADF8\uC778 \uC124\uC815\uC5D0\uC11C \uC9C1\uC811 \uCF1C \uC8FC\uC138\uC694.");
-          if (r.ok && String(r.port) !== String(port))
-            this.notifyPortChanged();
-        });
+        row("\u274C", `${name} (\uD3EC\uD2B8 ${port})`, "HTTP \uC11C\uBC84\uAC00 \uAEBC\uC838 \uC788\uC2B5\uB2C8\uB2E4. \uC790\uB3D9 \uC124\uC815\uC73C\uB85C \uCF1C\uC138\uC694.", "\u26A1 \uC790\uB3D9 \uC124\uC815", fix);
         return;
       }
       switch (probe) {
@@ -480,28 +517,13 @@ var A4PSettingTab = class extends import_obsidian4.PluginSettingTab {
           row("\u2705", `${name} (\uD3EC\uD2B8 ${port})`, okDesc, null, null);
           break;
         case "conflict":
-          row("\u26A0\uFE0F", `${name} (\uD3EC\uD2B8 ${port})`, "\uC774 \uD3EC\uD2B8\uC5D0 \uB2E4\uB978 \uBCFC\uD2B8\uC758 \uC11C\uBC84\uAC00 \uB5A0 \uC788\uC2B5\uB2C8\uB2E4 (\uD3EC\uD2B8 \uCDA9\uB3CC). \uBE48 \uD3EC\uD2B8\uB85C \uC62E\uAE30\uBA74 \uB450 \uBCFC\uD2B8\uB97C \uD568\uAED8 \uC4F8 \uC218 \uC788\uC2B5\uB2C8\uB2E4.", "\u{1F500} \uBE48 \uD3EC\uD2B8\uB85C \uC774\uB3D9", async () => {
-            const r = await resolve();
-            new import_obsidian4.Notice(r.ok ? `\uD3EC\uD2B8\uB97C ${r.port}(\uC73C)\uB85C \uC62E\uACBC\uC2B5\uB2C8\uB2E4 \u2705` : "\uBE48 \uD3EC\uD2B8 \uC774\uB3D9 \uC2E4\uD328 \u2014 \uD3EC\uD2B8\uB97C \uC9C1\uC811 \uBC14\uAFD4 \uC8FC\uC138\uC694 (\uC544\uB798 \uACE0\uAE09 \uC124\uC815).");
-            if (r.ok)
-              this.notifyPortChanged();
-          });
+          row("\u26A0\uFE0F", `${name} (\uD3EC\uD2B8 ${port})`, "\uC774 \uD3EC\uD2B8\uC5D0 \uB2E4\uB978 \uBCFC\uD2B8\uC758 \uC11C\uBC84\uAC00 \uB5A0 \uC788\uC2B5\uB2C8\uB2E4 (\uD3EC\uD2B8 \uCDA9\uB3CC). \uBE48 \uD3EC\uD2B8\uB85C \uC62E\uAE30\uBA74 \uB450 \uBCFC\uD2B8\uB97C \uD568\uAED8 \uC4F8 \uC218 \uC788\uC2B5\uB2C8\uB2E4.", "\u{1F500} \uBE48 \uD3EC\uD2B8\uB85C \uC774\uB3D9", fix);
           break;
         case "unknown":
-          row("\u26A0\uFE0F", `${name} (\uD3EC\uD2B8 ${port})`, "\uC11C\uBC84\uB294 \uC751\uB2F5\uD558\uC9C0\uB9CC \uC774 \uBCFC\uD2B8\uC758 \uC11C\uBC84\uC778\uC9C0 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. \uAC80\uC0C9\uC774 \uC548 \uB418\uBA74 [\uBE48 \uD3EC\uD2B8\uB85C \uC774\uB3D9]\uC744 \uB20C\uB7EC \uBCF4\uC138\uC694.", "\u{1F500} \uBE48 \uD3EC\uD2B8\uB85C \uC774\uB3D9", async () => {
-            const r = await resolve();
-            new import_obsidian4.Notice(r.ok ? `\uD3EC\uD2B8 ${r.port}\uC5D0\uC11C \uC815\uC0C1 \uC751\uB2F5\uC744 \uD655\uC778\uD588\uC2B5\uB2C8\uB2E4 \u2705` : "\uC774\uB3D9 \uC2E4\uD328 \u2014 \uD3EC\uD2B8\uB97C \uC9C1\uC811 \uBC14\uAFD4 \uC8FC\uC138\uC694 (\uC544\uB798 \uACE0\uAE09 \uC124\uC815).");
-            if (r.ok && String(r.port) !== String(port))
-              this.notifyPortChanged();
-          });
+          row("\u26A0\uFE0F", `${name} (\uD3EC\uD2B8 ${port})`, "\uC11C\uBC84\uB294 \uC751\uB2F5 \uC911\uC774\uC9C0\uB9CC \uC544\uC9C1 \uC774 \uBCFC\uD2B8\uC778\uC9C0 \uD655\uC778\uD558\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4 (\uC778\uB371\uC2F1 \uC911\uC77C \uC218 \uC788\uC74C). \uC7A0\uC2DC \uD6C4 [\u{1F504} \uC7AC\uAC80\uC0AC]\uB97C \uB20C\uB7EC \uC8FC\uC138\uC694.", null, null);
           break;
         default:
-          row("\u274C", `${name} (\uD3EC\uD2B8 ${port})`, "\uC124\uC815\uC740 \uCF1C\uC838 \uC788\uC9C0\uB9CC \uC11C\uBC84\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4 (\uD3EC\uD2B8 \uC810\uC720\xB7\uBC14\uC778\uB529 \uC2E4\uD328 \uAC00\uB2A5). \uC790\uB3D9 \uC124\uC815\uC774 \uBE48 \uD3EC\uD2B8\uB97C \uCC3E\uC544 \uBCF5\uAD6C\uD569\uB2C8\uB2E4.", "\u26A1 \uC790\uB3D9 \uC124\uC815", async () => {
-            const r = await resolve();
-            new import_obsidian4.Notice(r.ok ? `\uC11C\uBC84\uB97C \uBCF5\uAD6C\uD588\uC2B5\uB2C8\uB2E4 \u2705 (\uD3EC\uD2B8 ${r.port})` : "\uBCF5\uAD6C \uC2E4\uD328 \u2014 \uC635\uC2DC\uB514\uC5B8 \uC7AC\uC2DC\uC791 \uD6C4 \uB2E4\uC2DC \uC2DC\uB3C4\uD574 \uC8FC\uC138\uC694.");
-            if (r.ok && String(r.port) !== String(port))
-              this.notifyPortChanged();
-          });
+          row("\u274C", `${name} (\uD3EC\uD2B8 ${port})`, "\uC124\uC815\uC740 \uCF1C\uC838 \uC788\uC9C0\uB9CC \uC11C\uBC84\uAC00 \uC751\uB2F5\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. [\u26A1 \uC790\uB3D9 \uC124\uC815]\uC774 \uAC19\uC740 \uD3EC\uD2B8\uB85C \uBCF5\uAD6C\uB97C \uC2DC\uB3C4\uD569\uB2C8\uB2E4. \uADF8\uB798\uB3C4 \uC548 \uB418\uBA74 \uC635\uC2DC\uB514\uC5B8\uC744 \uC7AC\uC2DC\uC791\uD574 \uC8FC\uC138\uC694.", "\u26A1 \uC790\uB3D9 \uC124\uC815", fix);
       }
     };
     if (!st.omniInstalled) {
@@ -607,24 +629,36 @@ var A4POmnisearchPlugin = class extends import_obsidian5.Plugin {
       new import_obsidian5.Notice("A4P Omnisearch Helper\uAC00 \uCF1C\uC84C\uC2B5\uB2C8\uB2E4.\n\uC124\uC815 \uD0ED\uC5D0\uC11C \uCCB4\uD06C\uB9AC\uC2A4\uD2B8\uB97C \uD655\uC778\uD558\uACE0 [\uC124\uC815 \uCF54\uB4DC \uBCF5\uC0AC]\uB97C \uB20C\uB7EC \uC8FC\uC138\uC694.", 8e3);
     }
   }
-  /** 볼트 시작 시 포트 충돌을 감지하면 빈 포트로 자동 이동시킨다. */
+  /**
+   * 볼트 시작 시 포트 충돌(다른 볼트의 서버가 확정 응답)만 자동으로 빈 포트로 이동시킨다.
+   * down/unknown(서버 기동·인덱싱 지연)에는 개입하지 않는다 — Omnisearch를 반복 재시작시키면
+   * 캐시가 비워져 "Restart Obsidian" 상태에 빠진다.
+   */
   async autoResolveConflicts() {
     try {
       const st = await checkLiveStatus(this.app);
       let moved = false;
+      let needRestart = false;
       if (st.omniHttp && st.omniEnabled && st.omniProbe === "conflict") {
         const r = await resolveOmniPortConflict(this.app);
-        if (r.ok) {
+        if (r.moved) {
           moved = true;
           new import_obsidian5.Notice(`\u26A0\uFE0F \uB2E4\uB978 \uBCFC\uD2B8\uC640 \uD3EC\uD2B8\uAC00 \uACB9\uCCD0 Omnisearch \uD3EC\uD2B8\uB97C ${r.port}(\uC73C)\uB85C \uC62E\uACBC\uC2B5\uB2C8\uB2E4.`, 12e3);
+          if (!r.ok && r.reason === "restart")
+            needRestart = true;
         }
       }
       if (st.restHttp && st.restEnabled && st.restProbe === "conflict") {
         const r = await resolveRestPortConflict(this.app);
-        if (r.ok) {
+        if (r.moved) {
           moved = true;
           new import_obsidian5.Notice(`\u26A0\uFE0F \uB2E4\uB978 \uBCFC\uD2B8\uC640 \uD3EC\uD2B8\uAC00 \uACB9\uCCD0 Local REST \uD3EC\uD2B8\uB97C ${r.port}(\uC73C)\uB85C \uC62E\uACBC\uC2B5\uB2C8\uB2E4.`, 12e3);
+          if (!r.ok && r.reason === "restart")
+            needRestart = true;
         }
+      }
+      if (needRestart) {
+        new import_obsidian5.Notice("\u{1F501} \uC11C\uBC84\uAC00 \uC544\uC9C1 \uC900\uBE44\uB418\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4 \u2014 \uC635\uC2DC\uB514\uC5B8\uC744 \uC7AC\uC2DC\uC791\uD558\uBA74 \uC0C8 \uD3EC\uD2B8\uB85C \uC815\uC0C1 \uB3D9\uC791\uD569\uB2C8\uB2E4.", 15e3);
       }
       if (moved) {
         new import_obsidian5.Notice("\u{1F4CB} \uD3EC\uD2B8\uAC00 \uBC14\uB00C\uC5C8\uC2B5\uB2C8\uB2E4 \u2014 \uC124\uC815 \uCF54\uB4DC\uB97C \uB2E4\uC2DC \uBCF5\uC0AC\uD574 \uBE0C\uB77C\uC6B0\uC800 \uC704\uC82F \u26A1\uC5D0 \uBD99\uC5EC\uB123\uC5B4 \uC8FC\uC138\uC694.", 15e3);

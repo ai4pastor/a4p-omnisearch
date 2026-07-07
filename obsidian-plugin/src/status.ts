@@ -72,9 +72,20 @@ async function patchAndRestart(app: App, id: string, patch: Record<string, unkno
 		if (wasEnabled) await reg.disablePlugin(id);
 		await patchPluginData(app, id, patch);
 		await reg.enablePlugin(id);
-		return true;
+		if (!reg.plugins?.[id]) {
+			// enable이 조용히 실패해 플러그인이 꺼진 채 남는 것 방지 — 잠시 후 한 번 더
+			await new Promise((r) => window.setTimeout(r, 500));
+			await reg.enablePlugin(id);
+		}
+		return !!reg.plugins?.[id];
 	} catch {
-		return false;
+		// 실패해도 플러그인이 비활성 상태로 남지 않게 켜기만은 재시도
+		try {
+			await reg.enablePlugin(id);
+		} catch {
+			/* noop */
+		}
+		return !!reg.plugins?.[id];
 	}
 }
 

@@ -74,24 +74,34 @@ export default class A4POmnisearchPlugin extends Plugin {
 		}
 	}
 
-	/** 볼트 시작 시 포트 충돌을 감지하면 빈 포트로 자동 이동시킨다. */
+	/**
+	 * 볼트 시작 시 포트 충돌(다른 볼트의 서버가 확정 응답)만 자동으로 빈 포트로 이동시킨다.
+	 * down/unknown(서버 기동·인덱싱 지연)에는 개입하지 않는다 — Omnisearch를 반복 재시작시키면
+	 * 캐시가 비워져 "Restart Obsidian" 상태에 빠진다.
+	 */
 	private async autoResolveConflicts(): Promise<void> {
 		try {
 			const st = await checkLiveStatus(this.app);
 			let moved = false;
+			let needRestart = false;
 			if (st.omniHttp && st.omniEnabled && st.omniProbe === "conflict") {
 				const r = await resolveOmniPortConflict(this.app);
-				if (r.ok) {
+				if (r.moved) {
 					moved = true;
 					new Notice(`⚠️ 다른 볼트와 포트가 겹쳐 Omnisearch 포트를 ${r.port}(으)로 옮겼습니다.`, 12000);
+					if (!r.ok && r.reason === "restart") needRestart = true;
 				}
 			}
 			if (st.restHttp && st.restEnabled && st.restProbe === "conflict") {
 				const r = await resolveRestPortConflict(this.app);
-				if (r.ok) {
+				if (r.moved) {
 					moved = true;
 					new Notice(`⚠️ 다른 볼트와 포트가 겹쳐 Local REST 포트를 ${r.port}(으)로 옮겼습니다.`, 12000);
+					if (!r.ok && r.reason === "restart") needRestart = true;
 				}
+			}
+			if (needRestart) {
+				new Notice("🔁 서버가 아직 준비되지 않았습니다 — 옵시디언을 재시작하면 새 포트로 정상 동작합니다.", 15000);
 			}
 			if (moved) {
 				new Notice("📋 포트가 바뀌었습니다 — 설정 코드를 다시 복사해 브라우저 위젯 ⚡에 붙여넣어 주세요.", 15000);

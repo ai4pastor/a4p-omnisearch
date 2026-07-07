@@ -6,6 +6,7 @@ import { OMNI_ID, REST_ID, openPluginInstallPage, setOmnisearchHttp, setRestHttp
 import {
 	LiveStatus,
 	ProbeResult,
+	ResolveOutcome,
 	checkLiveStatus,
 	resolveOmniPortConflict,
 	resolveRestPortConflict,
@@ -213,6 +214,22 @@ export class A4PSettingTab extends PluginSettingTab {
 			}
 		};
 
+		// 해결 결과 공통 안내 — 포트 이동·재시작 필요 여부까지 정확히 알려준다
+		const reportOutcome = (name: string, r: ResolveOutcome) => {
+			if (r.ok) {
+				new Notice(`${name} 정상 확인 ✅ (포트 ${r.port})`);
+			} else if (r.reason === "restart") {
+				new Notice(`${name}: 설정은 완료됐지만 서버가 아직 안 떴습니다.\n🔁 옵시디언을 재시작한 뒤 [🔄 재검사]를 눌러 주세요.\n(Omnisearch가 캐시를 다시 만드는 중일 수 있습니다)`, 12000);
+			} else if (r.reason === "unknown") {
+				new Notice(`${name}: 서버가 응답 중입니다 — 인덱싱이 끝나기를 기다렸다가 [🔄 재검사]를 눌러 주세요.`, 8000);
+			} else if (r.reason === "nofree") {
+				new Notice(`${name}: 빈 포트를 찾지 못했습니다 — 아래 [고급]에서 포트를 직접 지정해 주세요.`, 8000);
+			} else {
+				new Notice(`${name}: 자동 설정 실패 — 해당 플러그인 설정에서 직접 켜거나 옵시디언을 재시작해 주세요.`, 8000);
+			}
+			if (r.moved) this.notifyPortChanged();
+		};
+
 		// 프로브 결과 → 표시 3단계: ✅ 정상 / ⚠️ 충돌·불명 / ❌ 응답 없음
 		const probeRow = (
 			name: string,
@@ -220,15 +237,14 @@ export class A4PSettingTab extends PluginSettingTab {
 			flagOn: boolean,
 			port: string | number,
 			okDesc: string,
-			resolve: () => Promise<{ ok: boolean; port: number }>
+			resolve: () => Promise<ResolveOutcome>
 		) => {
+			const fix = async () => {
+				reportOutcome(name, await resolve());
+			};
 			if (!flagOn && probe !== "conflict") {
 				// 아직 온보딩 전 (서버 설정 꺼짐) — 단, 꺼져 있는데 응답이 있으면 충돌로 취급
-				row("❌", `${name} (포트 ${port})`, "HTTP 서버가 꺼져 있습니다. 자동 설정으로 켜세요.", "⚡ 자동 설정", async () => {
-					const r = await resolve();
-					new Notice(r.ok ? `${name}를 켰습니다 ✅ (포트 ${r.port})` : "자동 설정 실패 — 해당 플러그인 설정에서 직접 켜 주세요.");
-					if (r.ok && String(r.port) !== String(port)) this.notifyPortChanged();
-				});
+				row("❌", `${name} (포트 ${port})`, "HTTP 서버가 꺼져 있습니다. 자동 설정으로 켜세요.", "⚡ 자동 설정", fix);
 				return;
 			}
 			switch (probe) {
@@ -236,25 +252,14 @@ export class A4PSettingTab extends PluginSettingTab {
 					row("✅", `${name} (포트 ${port})`, okDesc, null, null);
 					break;
 				case "conflict":
-					row("⚠️", `${name} (포트 ${port})`, "이 포트에 다른 볼트의 서버가 떠 있습니다 (포트 충돌). 빈 포트로 옮기면 두 볼트를 함께 쓸 수 있습니다.", "🔀 빈 포트로 이동", async () => {
-						const r = await resolve();
-						new Notice(r.ok ? `포트를 ${r.port}(으)로 옮겼습니다 ✅` : "빈 포트 이동 실패 — 포트를 직접 바꿔 주세요 (아래 고급 설정).");
-						if (r.ok) this.notifyPortChanged();
-					});
+					row("⚠️", `${name} (포트 ${port})`, "이 포트에 다른 볼트의 서버가 떠 있습니다 (포트 충돌). 빈 포트로 옮기면 두 볼트를 함께 쓸 수 있습니다.", "🔀 빈 포트로 이동", fix);
 					break;
 				case "unknown":
-					row("⚠️", `${name} (포트 ${port})`, "서버는 응답하지만 이 볼트의 서버인지 확인하지 못했습니다. 검색이 안 되면 [빈 포트로 이동]을 눌러 보세요.", "🔀 빈 포트로 이동", async () => {
-						const r = await resolve();
-						new Notice(r.ok ? `포트 ${r.port}에서 정상 응답을 확인했습니다 ✅` : "이동 실패 — 포트를 직접 바꿔 주세요 (아래 고급 설정).");
-						if (r.ok && String(r.port) !== String(port)) this.notifyPortChanged();
-					});
+					// 인덱싱 중이거나 빈 볼트일 수 있음 — 여기서 포트를 옮기면 Omnisearch가 반복 재시작돼 캐시가 깨진다. 개입하지 않는다.
+					row("⚠️", `${name} (포트 ${port})`, "서버는 응답 중이지만 아직 이 볼트인지 확인하지 못했습니다 (인덱싱 중일 수 있음). 잠시 후 [🔄 재검사]를 눌러 주세요.", null, null);
 					break;
-				default: // down — 설정은 켜져 있는데 응답 없음 (바인딩 실패 등)
-					row("❌", `${name} (포트 ${port})`, "설정은 켜져 있지만 서버가 응답하지 않습니다 (포트 점유·바인딩 실패 가능). 자동 설정이 빈 포트를 찾아 복구합니다.", "⚡ 자동 설정", async () => {
-						const r = await resolve();
-						new Notice(r.ok ? `서버를 복구했습니다 ✅ (포트 ${r.port})` : "복구 실패 — 옵시디언 재시작 후 다시 시도해 주세요.");
-						if (r.ok && String(r.port) !== String(port)) this.notifyPortChanged();
-					});
+				default: // down — 설정은 켜져 있는데 응답 없음
+					row("❌", `${name} (포트 ${port})`, "설정은 켜져 있지만 서버가 응답하지 않습니다. [⚡ 자동 설정]이 같은 포트로 복구를 시도합니다. 그래도 안 되면 옵시디언을 재시작해 주세요.", "⚡ 자동 설정", fix);
 			}
 		};
 
