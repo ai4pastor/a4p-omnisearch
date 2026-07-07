@@ -1,0 +1,12 @@
+{
+  "name": "a4p-omnisearch-repo",
+  "private": true,
+  "description": "A4P Omnisearch 저장소 루트 — 테스트 실행용 (배포물은 userscript/, obsidian-plugin/)",
+  "scripts": {
+    "test": "node test/bible-parser.test.mjs && node test/widget-smoke.mjs"
+  },
+  "devDependencies": {
+    "jquery": "^3.7.1",
+    "jsdom": "^24.0.0"
+  }
+}
