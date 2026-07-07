@@ -19,19 +19,27 @@ export interface LiveStatus extends DepStatus {
 const withTimeout = <T>(p: Promise<T>, ms = 3000): Promise<T | "timeout"> =>
 	Promise.race([p, new Promise<"timeout">((r) => window.setTimeout(() => r("timeout"), ms))]);
 
+// 루프백 호스트는 하나로 통일하면 안 된다 — 실측: Omnisearch는 localhost로 listen해 OS에 따라
+// ::1(IPv6)에만 바인딩되고, Local REST API는 127.0.0.1(IPv4)에 바인딩된다. requestUrl(Node 스택)의
+// localhost 해석도 환경 의존이라, localhost 실패 시 127.0.0.1로 폴백해 둘 다 시도한다.
+const LOOPBACK_HOSTS = ["localhost", "127.0.0.1"];
+
 async function omniSearchOnce(port: string, query: string, timeoutMs: number): Promise<Array<{ vault?: string }> | "down" | "unknown"> {
-	try {
-		const res = await withTimeout(
-			requestUrl({ url: `http://localhost:${port}/search?q=${encodeURIComponent(query)}`, throw: false }),
-			timeoutMs
-		);
-		if (res === "timeout") return "down";
-		if (res.status < 200 || res.status >= 300) return "unknown";
-		const items = res.json;
-		return Array.isArray(items) ? items : "unknown";
-	} catch {
-		return "down"; // 연결 거부는 reject로 온다
+	for (const host of LOOPBACK_HOSTS) {
+		try {
+			const res = await withTimeout(
+				requestUrl({ url: `http://${host}:${port}/search?q=${encodeURIComponent(query)}`, throw: false }),
+				timeoutMs
+			);
+			if (res === "timeout") continue; // 다음 호스트로
+			if (res.status < 200 || res.status >= 300) return "unknown";
+			const items = res.json;
+			return Array.isArray(items) ? items : "unknown";
+		} catch {
+			// 연결 거부는 reject로 온다 → 다음 호스트 시도
+		}
 	}
+	return "down";
 }
 
 /** Omnisearch 서버 생존 + 볼트 정체성 판정: 이 볼트에 실존하는 파일명으로 검색해 응답의 vault 필드를 비교한다. */
@@ -56,22 +64,25 @@ export async function probeOmnisearch(app: App, port: string, timeoutMs = 3000):
 /** Local REST 서버 생존 + 정체성 판정: 볼트별 랜덤 API 키가 인증되면 이 볼트의 서버가 확실하다. */
 export async function probeLocalRest(port: number, key: string): Promise<ProbeResult> {
 	if (!key) return "down"; // 키 미생성(설치 전) — 프로브 불가
-	try {
-		const res = await withTimeout(
-			requestUrl({
-				url: `http://127.0.0.1:${port}/`,
-				headers: { Authorization: `Bearer ${key}` },
-				throw: false,
-			})
-		);
-		if (res === "timeout") return "down";
-		if (res.status === 401 || res.status === 403) return "conflict"; // 서버는 있는데 우리 키 거부 = 다른 볼트
-		if (res.status < 200 || res.status >= 300) return "unknown";
-		const auth = (res.json as { authenticated?: boolean } | null)?.authenticated;
-		return auth === true ? "ok" : auth === false ? "conflict" : "unknown";
-	} catch {
-		return "down";
+	for (const host of LOOPBACK_HOSTS) {
+		try {
+			const res = await withTimeout(
+				requestUrl({
+					url: `http://${host}:${port}/`,
+					headers: { Authorization: `Bearer ${key}` },
+					throw: false,
+				})
+			);
+			if (res === "timeout") continue;
+			if (res.status === 401 || res.status === 403) return "conflict"; // 서버는 있는데 우리 키 거부 = 다른 볼트
+			if (res.status < 200 || res.status >= 300) return "unknown";
+			const auth = (res.json as { authenticated?: boolean } | null)?.authenticated;
+			return auth === true ? "ok" : auth === false ? "conflict" : "unknown";
+		} catch {
+			// 연결 거부 → 다음 호스트
+		}
 	}
+	return "down";
 }
 
 /** 플래그 검사(checkStatus) + 실검증 프로브 2건 병렬. */
@@ -84,20 +95,31 @@ export async function checkLiveStatus(app: App): Promise<LiveStatus> {
 	return { ...st, omniProbe, restProbe };
 }
 
-/** 포트 빈자리 검사 — 실제 bind 테스트 (isDesktopOnly라 Node net 사용 가능). */
-export function isPortFree(port: number): Promise<boolean> {
+/** 특정 루프백 주소에 bind해 보는 테스트. IPv6 미지원(EADDRNOTAVAIL/EAFNOSUPPORT)은 free로 간주. */
+function bindTest(port: number, host: string): Promise<boolean> {
 	return new Promise((resolve) => {
 		try {
 			// eslint-disable-next-line @typescript-eslint/no-var-requires
 			const net = require("net");
 			const srv = net.createServer();
-			srv.once("error", () => resolve(false)); // EADDRINUSE 등
+			srv.once("error", (e: NodeJS.ErrnoException) =>
+				resolve(e?.code === "EADDRNOTAVAIL" || e?.code === "EAFNOSUPPORT")); // 스택 자체가 없으면 점유 아님
 			srv.once("listening", () => srv.close(() => resolve(true)));
-			srv.listen(port, "127.0.0.1");
+			srv.listen(port, host);
 		} catch {
 			resolve(false);
 		}
 	});
+}
+
+/**
+ * 포트 빈자리 검사 — 실제 bind 테스트 (isDesktopOnly라 Node net 사용 가능).
+ * 듀얼스택 필수: Omnisearch는 ::1에, Local REST는 127.0.0.1에 바인딩되므로
+ * 둘 다 비어 있어야 진짜 빈 포트다 (127.0.0.1만 검사하면 ::1 점유 포트를 빈 것으로 오판).
+ */
+export async function isPortFree(port: number): Promise<boolean> {
+	const [v4, v6] = await Promise.all([bindTest(port, "127.0.0.1"), bindTest(port, "::1")]);
+	return v4 && v6;
 }
 
 /** start부터 +1씩 최대 20개 스캔해 빈 포트를 찾는다. skip 목록(상대 서비스 포트 등)은 건너뜀. */

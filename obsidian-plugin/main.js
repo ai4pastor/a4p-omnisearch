@@ -183,21 +183,24 @@ var FolderSuggest = class extends import_obsidian2.AbstractInputSuggest {
 // src/probe.ts
 var import_obsidian3 = require("obsidian");
 var withTimeout = (p, ms = 3e3) => Promise.race([p, new Promise((r) => window.setTimeout(() => r("timeout"), ms))]);
+var LOOPBACK_HOSTS = ["localhost", "127.0.0.1"];
 async function omniSearchOnce(port, query, timeoutMs) {
-  try {
-    const res = await withTimeout(
-      (0, import_obsidian3.requestUrl)({ url: `http://localhost:${port}/search?q=${encodeURIComponent(query)}`, throw: false }),
-      timeoutMs
-    );
-    if (res === "timeout")
-      return "down";
-    if (res.status < 200 || res.status >= 300)
-      return "unknown";
-    const items = res.json;
-    return Array.isArray(items) ? items : "unknown";
-  } catch (e) {
-    return "down";
+  for (const host of LOOPBACK_HOSTS) {
+    try {
+      const res = await withTimeout(
+        (0, import_obsidian3.requestUrl)({ url: `http://${host}:${port}/search?q=${encodeURIComponent(query)}`, throw: false }),
+        timeoutMs
+      );
+      if (res === "timeout")
+        continue;
+      if (res.status < 200 || res.status >= 300)
+        return "unknown";
+      const items = res.json;
+      return Array.isArray(items) ? items : "unknown";
+    } catch (e) {
+    }
   }
+  return "down";
 }
 async function probeOmnisearch(app, port, timeoutMs = 3e3) {
   var _a, _b;
@@ -223,25 +226,27 @@ async function probeLocalRest(port, key) {
   var _a;
   if (!key)
     return "down";
-  try {
-    const res = await withTimeout(
-      (0, import_obsidian3.requestUrl)({
-        url: `http://127.0.0.1:${port}/`,
-        headers: { Authorization: `Bearer ${key}` },
-        throw: false
-      })
-    );
-    if (res === "timeout")
-      return "down";
-    if (res.status === 401 || res.status === 403)
-      return "conflict";
-    if (res.status < 200 || res.status >= 300)
-      return "unknown";
-    const auth = (_a = res.json) == null ? void 0 : _a.authenticated;
-    return auth === true ? "ok" : auth === false ? "conflict" : "unknown";
-  } catch (e) {
-    return "down";
+  for (const host of LOOPBACK_HOSTS) {
+    try {
+      const res = await withTimeout(
+        (0, import_obsidian3.requestUrl)({
+          url: `http://${host}:${port}/`,
+          headers: { Authorization: `Bearer ${key}` },
+          throw: false
+        })
+      );
+      if (res === "timeout")
+        continue;
+      if (res.status === 401 || res.status === 403)
+        return "conflict";
+      if (res.status < 200 || res.status >= 300)
+        return "unknown";
+      const auth = (_a = res.json) == null ? void 0 : _a.authenticated;
+      return auth === true ? "ok" : auth === false ? "conflict" : "unknown";
+    } catch (e) {
+    }
   }
+  return "down";
 }
 async function checkLiveStatus(app) {
   const st = await checkStatus(app);
@@ -251,18 +256,22 @@ async function checkLiveStatus(app) {
   ]);
   return { ...st, omniProbe, restProbe };
 }
-function isPortFree(port) {
+function bindTest(port, host) {
   return new Promise((resolve) => {
     try {
       const net = require("net");
       const srv = net.createServer();
-      srv.once("error", () => resolve(false));
+      srv.once("error", (e) => resolve((e == null ? void 0 : e.code) === "EADDRNOTAVAIL" || (e == null ? void 0 : e.code) === "EAFNOSUPPORT"));
       srv.once("listening", () => srv.close(() => resolve(true)));
-      srv.listen(port, "127.0.0.1");
+      srv.listen(port, host);
     } catch (e) {
       resolve(false);
     }
   });
+}
+async function isPortFree(port) {
+  const [v4, v6] = await Promise.all([bindTest(port, "127.0.0.1"), bindTest(port, "::1")]);
+  return v4 && v6;
 }
 async function findFreePort(start, skip) {
   for (let p = start; p < start + 20; p++) {

@@ -176,8 +176,9 @@ const clickBolt = (env) => env.$(`#OmnisearchObsidianResults .om-setup-code`).tr
 
 console.log("\n[네트워크] 검색 요청 호스트");
 {
+  // localhost 필수 — Omnisearch는 ::1에만 바인딩될 수 있어 127.0.0.1 고정 시 연결 실패 (v1.3.2 회귀 가드)
   const env = await makeEnv({ q: "사랑" });
-  check("fetchPort가 127.0.0.1 사용", env.calls.xhrUrls.length > 0 && env.calls.xhrUrls.every((u) => /^http:\/\/127\.0\.0\.1:/.test(u)));
+  check("fetchPort가 localhost 사용 (127.0.0.1 고정 금지)", env.calls.xhrUrls.length > 0 && env.calls.xhrUrls.every((u) => /^http:\/\/localhost:/.test(u)));
 }
 
 console.log("\n[멀티볼트 온보딩] 설정 코드 슬롯 선택");
@@ -272,6 +273,7 @@ console.log("\n[진단] 볼트 불일치 경고 + 버전 표시");
   check("다른 볼트가 포트 점유 → ⚠️ 경고", diag.includes("다른 볼트") && diag.includes("other_vault"));
   check("진단에 현재 버전 표시", diag.includes("현재 버전 v"));
   check("새 버전 안내 (9.9.9 스텁)", diag.includes("새 버전 v9.9.9"));
+  check("진단에 등록 볼트 요약 표시", diag.includes("등록된 볼트 1개") && diag.includes("포트 51361"));
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

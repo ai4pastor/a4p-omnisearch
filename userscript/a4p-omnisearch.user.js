@@ -5,7 +5,7 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.3.0
+// @version      1.3.2
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -39,7 +39,7 @@
     "use strict";
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.3.0";
+    const VERSION = "1.3.2";
     const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
@@ -344,7 +344,7 @@
         let p = String(port || "").trim().replace(/\/+$/, "");
         if (!p) return null;
         if (/^https?:\/\//i.test(p)) return p;          // full URL
-        if (/^\d+$/.test(p)) return "http://127.0.0.1:" + p; // bare port → HTTP
+        if (/^\d+$/.test(p)) return "http://127.0.0.1:" + p; // bare port → HTTP (Local REST는 127.0.0.1 바인딩 실측 — Omnisearch와 달리 IPv4)
         if (/^[\w.-]+:\d+$/.test(p)) return "http://" + p;   // host:port
         return null;
     }
@@ -678,7 +678,11 @@
                 else restLine = `❌ Local REST API 연결 안 됨 (포트 ${escapeHtml(cfg.lrPort)})<br /><span class="om-diag-fix">→ A4P Helper 플러그인에서 [자동 설정]을 누르세요.</span>`;
                 return `<div class="om-diag-vault"><b>${name}</b><br />${omniLine}<br />${restLine}</div>`;
             }).join("");
-            list.html(`<div class="om-diag">${rows}<div class="om-diag-foot">현재 버전 v${VERSION} <span class="om-diag-ver"></span><br />진단을 닫으려면 ⟳ 새로고침을 누르세요.</div></div>`);
+            // 등록 볼트 요약 — "연결은 되는데 0건"일 때 원하는 볼트가 등록 안 된 것을 바로 알 수 있게
+            const summary = `<div class="om-diag-vault"><b>등록된 볼트 ${ports.length}개</b><br />` +
+                ports.map((cfg, i) => `${i + 1}. ${escapeHtml(cfg.label || cfg.dvault || "(이름 없음)")} — 포트 ${escapeHtml(cfg.port)}`).join("<br />") +
+                `<br /><span class="om-diag-fix">찾는 노트가 다른 볼트에 있다면, 그 볼트의 A4P Helper에서 설정 코드를 복사해 ⚡에 붙여넣으세요 (기존 볼트에 추가 등록됩니다).</span></div>`;
+            list.html(`<div class="om-diag">${summary}${rows}<div class="om-diag-foot">현재 버전 v${VERSION} <span class="om-diag-ver"></span><br />진단을 닫으려면 ⟳ 새로고침을 누르세요.</div></div>`);
             setCount(null);
             checkLatestVersion().then((latest) => {
                 if (!latest) return; // 확인 실패 — 아무것도 표시 안 함
@@ -1246,7 +1250,9 @@
         return new Promise((resolve) => {
             GM.xmlHttpRequest({
                 method: "GET",
-                url: `http://127.0.0.1:${encodeURIComponent(port)}/search?q=${encodeURIComponent(query)}`,
+                // localhost 필수 (127.0.0.1 고정 금지): Omnisearch 서버는 OS에 따라 ::1(IPv6)에만
+                // 바인딩되는데, 브라우저는 localhost에 대해 IPv6/IPv4를 모두 시도해 어느 쪽이든 닿는다.
+                url: `http://localhost:${encodeURIComponent(port)}/search?q=${encodeURIComponent(query)}`,
                 headers: { "Content-Type": "application/json" },
                 timeout: S.requestTimeout,
                 onload: (res) => {
