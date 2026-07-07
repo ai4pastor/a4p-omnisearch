@@ -1,4 +1,4 @@
-// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 77케이스
+// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 85케이스
 // 실행 준비: npm install   (레포 루트에서 — devDependencies: jsdom, jquery)
 // 실행:      npm test  (파서 테스트 포함)  또는  node test/widget-smoke.mjs
 // 검증 범위: 4개 엔진 마운트 위치, 에디토리얼 스킨/테마 클래스, 카테고리 칩,
@@ -124,7 +124,7 @@ async function makeEnv(opts = {}) {
     { url, runScripts: "outside-only", pretendToBeVisual: true });
   const { window } = dom;
   const calls = { xhrUrls: [], sets: [], saves: 0, order: [], confirms: 0, lastAlert: "" };
-  const gmStore = {};
+  const gmStore = Object.assign({}, opts.gmStore || {});
   window.GM = {
     getValue: (k, d) => Promise.resolve(k in gmStore ? gmStore[k] : d),
     setValue: (k, v) => { gmStore[k] = v; },
@@ -274,6 +274,38 @@ console.log("\n[진단] 볼트 불일치 경고 + 버전 표시");
   check("진단에 현재 버전 표시", diag.includes("현재 버전 v"));
   check("새 버전 안내 (9.9.9 스텁)", diag.includes("새 버전 v9.9.9"));
   check("진단에 등록 볼트 요약 표시", diag.includes("등록된 볼트 1개") && diag.includes("포트 51361"));
+}
+
+console.log("\n[v1.3.3] 숨김 필터 안내 + 원클릭 해제");
+{
+  const resp = JSON.stringify([
+    { score: 100, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+    { score: 40, vault: "csh_remote", path: "300. Sermons/설교B.md", basename: "설교B", excerpt: "…" },
+  ]);
+  // 사용자가 예전에 최소 관련도 슬라이더를 90%로 올려놓고 잊은 상황 재현
+  const env = await makeEnv({ q: "설교", respond: () => resp, gmStore: { om_minRel: 90 } });
+  const titles = () => env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title").text()).get();
+  check("minRel 90% 저장 상태 → 1건만 표시", titles().length === 1);
+  const hintEl = env.$(`#OmnisearchObsidianResults .om-filter-hint`);
+  check("필터 숨김 안내 표시 (1건 숨김 + 90%)", hintEl.length === 1 && /1건 숨김/.test(hintEl.text()) && /90%/.test(hintEl.text()));
+  env.$(`#OmnisearchObsidianResults .om-filter-reset`).trigger("click");
+  check("필터 해제 클릭 → 2건 모두 표시", titles().length === 2);
+  check("필터 해제가 GM 저장소에 반영 (om_minRel=0)", (await env.window.GM.getValue("om_minRel", -1)) === 0);
+  check("해제 후 안내 사라짐", env.$(`#OmnisearchObsidianResults .om-filter-hint`).length === 0);
+}
+
+console.log("\n[v1.3.3] 중복 실행 가드");
+{
+  const env = await makeEnv({ q: "사랑" });
+  const before = env.window.document.querySelectorAll("#OmnisearchObsidianResults").length;
+  // 같은 페이지에서 스크립트를 한 번 더 실행 (중복 설치본 시뮬레이션)
+  const body3 = SRC.slice(SRC.indexOf("==/UserScript=="));
+  const script3 = body3.slice(body3.indexOf("\n") + 1);
+  env.window.eval(`(function(){ const GM = window.GM; ${script3} })()`);
+  await new Promise((r) => setTimeout(r, 400));
+  const after = env.window.document.querySelectorAll("#OmnisearchObsidianResults").length;
+  check("두 번째 인스턴스는 조용히 종료 (위젯 1개 유지)", before === 1 && after === 1);
+  check("가드 속성이 문서에 박힘", env.window.document.documentElement.getAttribute("data-a4p-omnisearch") === "1");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

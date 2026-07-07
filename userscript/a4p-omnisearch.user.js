@@ -5,7 +5,7 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.3.2
+// @version      1.3.3
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -38,8 +38,17 @@
 (function () {
     "use strict";
 
+    // 중복 실행 가드: 같은 스크립트가 2개 설치돼 동시에 켜지면(구버전+신버전 공존)
+    // 설정 저장소가 갈라져 "설정은 맞는데 0건" 같은 유령 증상이 난다. DOM 속성은
+    // Tampermonkey 스크립트 샌드박스 간에도 공유되므로 먼저 실행된 쪽만 살아남는다.
+    if (document.documentElement.hasAttribute("data-a4p-omnisearch")) {
+        console.warn("[A4P Omnisearch] 다른 인스턴스가 이미 실행 중 — 이 복사본은 종료합니다. Tampermonkey에서 중복 설치본을 삭제하세요.");
+        return;
+    }
+    document.documentElement.setAttribute("data-a4p-omnisearch", "1");
+
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.3.2";
+    const VERSION = "1.3.3";
     const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
@@ -955,6 +964,9 @@
                 background:var(--wash); border-radius:8px; padding:10px 12px; margin-bottom:8px; line-height:1.8;
             }
             #${ID} .om-diag-fix { color:var(--muted); font-size:11.5px; }
+            #${ID} .om-filter-hint { color:var(--muted); font-size:11.5px; padding:6px 2px; border-bottom:1px solid var(--line); }
+            #${ID} .om-filter-hint a { color:var(--accent); font-weight:600; text-decoration:none; }
+            #${ID} .om-filter-hint a:hover { text-decoration:underline; }
             #${ID} .om-diag-foot { text-align:center; color:var(--faint); font-size:11px; padding-top:4px; }
 
             /* 플로팅 패널 (네이버 폴백 · 유튜브 · Bing 폴백) — 위젯이 종이 패널 위에 얹힘 */
@@ -1339,7 +1351,13 @@
         if (S.excludeFolders.length) {
             v = v.filter((r) => !S.excludeFolders.some((f) => String(r.path || "").toLowerCase().includes(f)));
         }
-        if (state.type !== "all") v = v.filter((r) => matchType(r.path, state.type));
+        // 접힌 패널 속 필터(타입·최소 관련도)는 눈에 안 보인 채 결과를 숨길 수 있어 집계해서 안내한다.
+        let hiddenInvisible = 0;
+        if (state.type !== "all") {
+            const before = v.length;
+            v = v.filter((r) => matchType(r.path, state.type));
+            hiddenInvisible += before - v.length;
+        }
 
         // 목회 카테고리 필터: 노트의 "폴더 경로"에 카테고리 키워드가 포함되면 통과 (키워드는 설정에서 변경 가능)
         // 파일명은 제외 — "300. Sermons/성경적 세계관.md"가 '성경' 칩에 걸리는 오분류 방지.
@@ -1353,8 +1371,11 @@
 
         state.topScore = Math.max(1, ...state.raw.map((r) => Number(r.score) || 0)); // 렌더 폴백용
         if (state.minRel > 0) {
+            const before = v.length;
             v = v.filter((r) => (r._rel || 0) * 100 >= state.minRel); // 응답별 상대값 기준
+            hiddenInvisible += before - v.length;
         }
+        state.hiddenByFilters = hiddenInvisible;
 
         if (state.sort === "name") {
             v.sort((a, b) => String(a.basename).localeCompare(String(b.basename)));
@@ -1526,6 +1547,17 @@
         // ⚡ 설정 코드 붙여넣기 / 🩺 연결 진단
         $(document).on("click", `#${ID} .om-setup-code`, (e) => { e.preventDefault(); importSetupCode(); });
         $(document).on("click", `#${ID} .om-diagnose`, (e) => { e.preventDefault(); runDiagnostics(); });
+        // 숨김 필터 원클릭 해제: 최소 관련도 0 + 타입 전체로 되돌리고 저장·재렌더
+        $(document).on("click", `#${ID} .om-filter-reset`, (e) => {
+            e.preventDefault();
+            state.minRel = 0; setVal("om_minRel", 0);
+            state.type = "all"; setVal("om_type", "all");
+            $(`#${ID} .om-minrel`).val(0);
+            $(`#${ID} .om-minrel-val`).text("0%");
+            $(`#${ID} .om-type button`).removeClass("active").filter(`[data-v="all"]`).addClass("active");
+            applyPipeline();
+            renderResults();
+        });
 
         // 성경구절 카드 버튼: 구절 노트 열기 / 인용 노트 찾기 / 구절 칩
         $(document).on("click", `#${ID} .om-bible-open`, function (e) {
@@ -1624,10 +1656,17 @@
         setCount(state.view.length);
         renderBibleCard();
 
+        // 접힌 패널의 필터가 결과를 숨기고 있으면 알리고 원클릭 해제 제공
+        // (슬라이더를 만졌다가 잊으면 "0~1건"만 보이는 함정 방지)
+        const hint = state.hiddenByFilters > 0
+            ? `<div class="om-filter-hint">필터로 ${state.hiddenByFilters}건 숨김 (최소 관련도 ${state.minRel}%${state.type !== "all" ? " · 타입 " + escapeHtml(state.type) : ""}) — <a href="#" class="om-filter-reset">필터 해제</a></div>`
+            : "";
+
         if (state.view.length === 0) {
-            list.html(`<span class="om-loading">옵시디언에서 결과 없음</span>`);
+            list.html(hint || `<span class="om-loading">옵시디언에서 결과 없음</span>`);
             return;
         }
+        if (hint) list.append(hint);
 
         const multiVault = state.vaultsSeen > 1;
         const showBadge = S.showVaultBadge === "always" || (S.showVaultBadge === "auto" && multiVault);
