@@ -57,11 +57,11 @@ export class A4PSettingTab extends PluginSettingTab {
 
 	// ---------- 카테고리 폴더 (행 단위 UI) ----------
 
-	/** 카테고리별 자료 위치 — 위젯의 설교/조각/묵상/성경/주석 칩이 이 경로 키워드로 분류된다. */
+	/** 카테고리별 자료 위치 — 위젯의 설교/조각/묵상/성경/자료 칩이 이 경로 키워드로 분류되고, 주석 폴더는 검색에서 제외된다. */
 	private renderCategorySection(containerEl: HTMLElement): void {
 		containerEl.createEl("h3", { text: "자료 위치 (카테고리 필터)" });
 		containerEl.createEl("p", {
-			text: "검색 위젯의 [설교][조각][묵상][성경][주석] 칩이 노트를 분류할 때 쓰는 폴더 위치입니다. 노트 경로에 아래 폴더 이름이 포함되면 해당 카테고리로 잡힙니다. 폴더는 카테고리마다 여러 개 추가할 수 있고, 설정 코드에 함께 담겨 위젯에 자동 적용됩니다.",
+			text: "검색 위젯의 [설교][조각][묵상][성경][자료] 칩이 노트를 분류할 때 쓰는 폴더 위치입니다. 노트 경로에 아래 폴더 이름이 포함되면 해당 카테고리로 잡힙니다. 폴더는 카테고리마다 여러 개 추가할 수 있고, 설정 코드에 함께 담겨 위젯에 자동 적용됩니다. '주석' 폴더의 노트는 검색 결과에서 기본 제외됩니다 (위젯 설정에서 해제 가능).",
 			cls: "a4p-desc",
 		});
 
@@ -84,7 +84,8 @@ export class A4PSettingTab extends PluginSettingTab {
 			["frag", "조각", "설교조각·강의조각 등 조각 메모 폴더"],
 			["devo", "묵상", "묵상·큐티 노트 폴더"],
 			["bible", "성경", "성경구절 노트 폴더"],
-			["comm", "주석", "주석·강해 자료 폴더"],
+			["ref", "자료", "여러 통로로 모은 일반 자료·Readwise 하이라이트 폴더"],
+			["comm", "주석 (검색에서 제외)", "주석·강해 폴더 — 위젯 기본 설정에서 검색 결과에 표시되지 않습니다 (위젯 설정 '주석 노트 숨기기'에서 해제 가능)"],
 		];
 		for (const [key, name, desc] of defs) {
 			this.catSections[key] = { el: containerEl.createDiv({ cls: "a4p-cat-section" }), name, desc };
@@ -147,12 +148,13 @@ export class A4PSettingTab extends PluginSettingTab {
 
 	/** 볼트 폴더명을 스캔해 카테고리별 후보 폴더를 찾는다. 조각을 먼저 잡아 '설교조각'이 설교로 새지 않게 한다. */
 	private detectCategoryFolders(): CategoryFolders {
-		const buckets: Record<CategoryKey, string[]> = { sermon: [], frag: [], devo: [], bible: [], comm: [] };
+		const buckets: Record<CategoryKey, string[]> = { sermon: [], frag: [], devo: [], bible: [], ref: [], comm: [] };
 		const rules: Array<[CategoryKey, RegExp]> = [
 			["frag", /조각/],
 			["bible", /성경/],
 			["devo", /묵상|큐티|qt/i],
 			["comm", /주석|강해/],
+			["ref", /reference|readwise|자료/i],
 			["sermon", /설교|sermon/i],
 		];
 		for (const f of this.app.vault.getAllLoadedFiles()) {
@@ -166,7 +168,7 @@ export class A4PSettingTab extends PluginSettingTab {
 		}
 		const d = this.plugin.settings.cats;
 		const pick = (key: CategoryKey) => (buckets[key].length ? buckets[key].slice(0, 6) : [...d[key]]);
-		return { sermon: pick("sermon"), frag: pick("frag"), devo: pick("devo"), bible: pick("bible"), comm: pick("comm") };
+		return { sermon: pick("sermon"), frag: pick("frag"), devo: pick("devo"), bible: pick("bible"), ref: pick("ref"), comm: pick("comm") };
 	}
 
 	// ---------- 상태 대시보드 (실검증 프로브) ----------

@@ -1,4 +1,4 @@
-// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 91케이스
+// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 105케이스
 // 실행 준비: npm install   (레포 루트에서 — devDependencies: jsdom, jquery)
 // 실행:      npm test  (파서 테스트 포함)  또는  node test/widget-smoke.mjs
 // 검증 범위: 4개 엔진 마운트 위치, 에디토리얼 스킨/테마 클래스, 카테고리 칩,
@@ -6,6 +6,8 @@
 //            비검색 페이지(유튜브 watch, 구글 지도·이미지·홈) 미생성 가드.
 // v1.3.0 추가: 메타블록 정적 검사, 127.0.0.1 통일, 멀티볼트 설정 코드 슬롯 선택(5종),
 //            refOnly 그룹 정렬·응답별 정규화, 카테고리 디렉토리 매칭, 진단 볼트 불일치·버전 표시.
+// v1.5.0 추가: 주석 칩 제거·기본 제외(디렉토리 매칭), '자료' 칩, 다양성 정렬(교차 배치),
+//            설정 코드 cats.ref, om_cat 잔존값 마이그레이션.
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import { createRequire } from "module";
@@ -354,6 +356,90 @@ console.log("\n[v1.3.3] 중복 실행 가드");
   const after = env.window.document.querySelectorAll("#OmnisearchObsidianResults").length;
   check("두 번째 인스턴스는 조용히 종료 (위젯 1개 유지)", before === 1 && after === 1);
   check("가드 속성이 문서에 박힘", env.window.document.documentElement.getAttribute("data-a4p-omnisearch") === "1");
+}
+
+// ================================================================
+// v1.5.0 신규 케이스: 주석 칩 제거·기본 제외, '자료' 칩 신설, 다양성 정렬,
+// 설정 코드 cats.ref, om_cat 잔존값 마이그레이션
+// ================================================================
+
+console.log("\n[v1.5.0] 카테고리 칩 구성 (주석 → 자료)");
+{
+  const env = await makeEnv({ q: "사랑" });
+  const cats = env.$(`#OmnisearchObsidianResults .om-cat`);
+  check("칩 6개 유지", cats.length === 6);
+  check("'자료'(ref) 칩 존재", env.$(`#OmnisearchObsidianResults .om-cat[data-v="ref"]`).text().includes("자료"));
+  check("'주석'(comm) 칩 부재", env.$(`#OmnisearchObsidianResults .om-cat[data-v="comm"]`).length === 0);
+}
+
+console.log("\n[v1.5.0] 주석 노트 기본 제외 (디렉토리 매칭 — 파일명 오탐 없음)");
+{
+  const resp = JSON.stringify([
+    { score: 100, vault: "csh_remote", path: "170. 성경/171. 성경주석/신약/04.요한복음/요한복음 1장 통합주석.md", basename: "요한복음 1장 통합주석", excerpt: "…" },
+    { score: 50, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+    { score: 30, vault: "csh_remote", path: "100. notes/140. Ideas/주석에 대한 생각.md", basename: "주석에 대한 생각", excerpt: "…" },
+  ]);
+  const titlesOf = (env) => env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title-text").text()).get();
+  const env = await makeEnv({ q: "사랑", respond: () => resp });
+  const titles = titlesOf(env);
+  check("주석 폴더 노트는 기본 제외", !titles.includes("요한복음 1장 통합주석"));
+  check("파일명에만 '주석'이 있는 노트는 표시 (디렉토리 매칭)", titles.includes("주석에 대한 생각"));
+  check("일반 노트 정상 표시", titles.includes("설교A"));
+  // 해제: '주석 노트 숨기기' 꺼짐 → 주석도 표시
+  const env2 = await makeEnv({ q: "사랑", respond: () => resp, gmValues: { hideComm: false } });
+  check("hideComm 해제 → 주석 노트 표시", titlesOf(env2).includes("요한복음 1장 통합주석"));
+}
+
+console.log("\n[v1.5.0] '자료' 칩 필터 (700. Reference + 800. Readwise)");
+{
+  const resp = JSON.stringify([
+    { score: 30, vault: "csh_remote", path: "700. Reference/712. 신학/로고스 개념 연구.md", basename: "로고스 개념 연구", excerpt: "…" },
+    { score: 20, vault: "csh_remote", path: "800. Readwise/Books/하이라이트.md", basename: "하이라이트", excerpt: "…" },
+    { score: 10, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+  ]);
+  const env = await makeEnv({ q: "로고스", respond: () => resp });
+  env.$(`#OmnisearchObsidianResults .om-cat[data-v="ref"]`).trigger("click");
+  const titles = env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title-text").text()).get();
+  check("자료 칩 → Reference·Readwise 노트만 표시", titles.length === 2 && titles.includes("로고스 개념 연구") && titles.includes("하이라이트"));
+}
+
+console.log("\n[v1.5.0] 다양성 정렬 (설교→조각→묵상→자료 교차 배치)");
+{
+  const mainResp = JSON.stringify([
+    { score: 100, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+    { score: 90, vault: "csh_remote", path: "300. Sermons/설교B.md", basename: "설교B", excerpt: "…" },
+    { score: 70, vault: "csh_remote", path: "100. notes/160. 묵상노트/묵상1.md", basename: "묵상1", excerpt: "…" },
+    { score: 60, vault: "csh_remote", path: "700. Reference/712. 신학/자료1.md", basename: "자료1", excerpt: "…" },
+  ]);
+  const auxResp = JSON.stringify([
+    { score: 200, vault: "csh_remote", path: "100. notes/180. 설교조각/조각1.md", basename: "조각1", excerpt: "…" },
+  ]);
+  const respond = (u) => (decodeURIComponent(u).includes("요1_1") ? auxResp : mainResp);
+  const titlesOf = (env) => env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title-text").text()).get();
+  const env = await makeEnv({ q: "요1:1", respond });
+  check("교차 배치: 설교→조각→묵상→자료→설교", JSON.stringify(titlesOf(env)) === JSON.stringify(["설교A", "조각1", "묵상1", "자료1", "설교B"]));
+  const env2 = await makeEnv({ q: "요1:1", respond, gmValues: { diversify: false } });
+  const t2 = titlesOf(env2);
+  check("diversify 해제 → 기존 그룹 정렬 복귀 (aux 먼저 + 점수순)", JSON.stringify(t2) === JSON.stringify(["조각1", "설교A", "설교B", "묵상1", "자료1"]));
+}
+
+console.log("\n[v1.5.0] 설정 코드 cats.ref 파싱");
+{
+  const env = await makeEnv({ prompts: [makeCode({ vault: "VaultA", omniPort: "51361", cats: { sermon: "설교", ref: "내자료", comm: "내주석" } })] });
+  clickBolt(env);
+  check("cats.ref → catRef 저장", env.cfgStore.catRef === "내자료");
+  check("cats.comm → catComm 유지 (제외 키워드로 사용)", env.cfgStore.catComm === "내주석");
+}
+
+console.log("\n[v1.5.0] om_cat 잔존값('comm') 마이그레이션");
+{
+  const resp = JSON.stringify([
+    { score: 10, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+  ]);
+  // 구버전에서 '주석' 칩을 눌러 둔 사용자: 칩이 사라진 뒤에도 필터만 남아 0건이 되면 안 된다
+  const env = await makeEnv({ q: "설교", respond: () => resp, gmStore: { om_cat: "comm" } });
+  check("사라진 칩 저장값 → 전체 탭 복귀 (결과 표시)", env.$(`#OmnisearchObsidianResults .om-result`).length === 1);
+  check("마이그레이션이 GM 저장소에 반영 (om_cat=all)", (await env.window.GM.getValue("om_cat", "")) === "all");
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);

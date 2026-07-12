@@ -375,11 +375,11 @@ var A4PSettingTab = class extends import_obsidian4.PluginSettingTab {
     );
   }
   // ---------- 카테고리 폴더 (행 단위 UI) ----------
-  /** 카테고리별 자료 위치 — 위젯의 설교/조각/묵상/성경/주석 칩이 이 경로 키워드로 분류된다. */
+  /** 카테고리별 자료 위치 — 위젯의 설교/조각/묵상/성경/자료 칩이 이 경로 키워드로 분류되고, 주석 폴더는 검색에서 제외된다. */
   renderCategorySection(containerEl) {
     containerEl.createEl("h3", { text: "\uC790\uB8CC \uC704\uCE58 (\uCE74\uD14C\uACE0\uB9AC \uD544\uD130)" });
     containerEl.createEl("p", {
-      text: "\uAC80\uC0C9 \uC704\uC82F\uC758 [\uC124\uAD50][\uC870\uAC01][\uBB35\uC0C1][\uC131\uACBD][\uC8FC\uC11D] \uCE69\uC774 \uB178\uD2B8\uB97C \uBD84\uB958\uD560 \uB54C \uC4F0\uB294 \uD3F4\uB354 \uC704\uCE58\uC785\uB2C8\uB2E4. \uB178\uD2B8 \uACBD\uB85C\uC5D0 \uC544\uB798 \uD3F4\uB354 \uC774\uB984\uC774 \uD3EC\uD568\uB418\uBA74 \uD574\uB2F9 \uCE74\uD14C\uACE0\uB9AC\uB85C \uC7A1\uD799\uB2C8\uB2E4. \uD3F4\uB354\uB294 \uCE74\uD14C\uACE0\uB9AC\uB9C8\uB2E4 \uC5EC\uB7EC \uAC1C \uCD94\uAC00\uD560 \uC218 \uC788\uACE0, \uC124\uC815 \uCF54\uB4DC\uC5D0 \uD568\uAED8 \uB2F4\uACA8 \uC704\uC82F\uC5D0 \uC790\uB3D9 \uC801\uC6A9\uB429\uB2C8\uB2E4.",
+      text: "\uAC80\uC0C9 \uC704\uC82F\uC758 [\uC124\uAD50][\uC870\uAC01][\uBB35\uC0C1][\uC131\uACBD][\uC790\uB8CC] \uCE69\uC774 \uB178\uD2B8\uB97C \uBD84\uB958\uD560 \uB54C \uC4F0\uB294 \uD3F4\uB354 \uC704\uCE58\uC785\uB2C8\uB2E4. \uB178\uD2B8 \uACBD\uB85C\uC5D0 \uC544\uB798 \uD3F4\uB354 \uC774\uB984\uC774 \uD3EC\uD568\uB418\uBA74 \uD574\uB2F9 \uCE74\uD14C\uACE0\uB9AC\uB85C \uC7A1\uD799\uB2C8\uB2E4. \uD3F4\uB354\uB294 \uCE74\uD14C\uACE0\uB9AC\uB9C8\uB2E4 \uC5EC\uB7EC \uAC1C \uCD94\uAC00\uD560 \uC218 \uC788\uACE0, \uC124\uC815 \uCF54\uB4DC\uC5D0 \uD568\uAED8 \uB2F4\uACA8 \uC704\uC82F\uC5D0 \uC790\uB3D9 \uC801\uC6A9\uB429\uB2C8\uB2E4. '\uC8FC\uC11D' \uD3F4\uB354\uC758 \uB178\uD2B8\uB294 \uAC80\uC0C9 \uACB0\uACFC\uC5D0\uC11C \uAE30\uBCF8 \uC81C\uC678\uB429\uB2C8\uB2E4 (\uC704\uC82F \uC124\uC815\uC5D0\uC11C \uD574\uC81C \uAC00\uB2A5).",
       cls: "a4p-desc"
     });
     new import_obsidian4.Setting(containerEl).setName("\u{1F50D} \uB0B4 \uBCFC\uD2B8\uC5D0\uC11C \uC790\uB3D9 \uAC10\uC9C0").setDesc("\uBCFC\uD2B8\uC758 \uD3F4\uB354 \uC774\uB984\uC744 \uD6D1\uC5B4\uC11C \uC124\uAD50\xB7\uC870\uAC01\xB7\uBB35\uC0C1\xB7\uC131\uACBD\xB7\uC8FC\uC11D \uD3F4\uB354\uB97C \uC790\uB3D9\uC73C\uB85C \uCC3E\uC544 \uCC44\uC6C1\uB2C8\uB2E4.").addButton(
@@ -397,7 +397,8 @@ var A4PSettingTab = class extends import_obsidian4.PluginSettingTab {
       ["frag", "\uC870\uAC01", "\uC124\uAD50\uC870\uAC01\xB7\uAC15\uC758\uC870\uAC01 \uB4F1 \uC870\uAC01 \uBA54\uBAA8 \uD3F4\uB354"],
       ["devo", "\uBB35\uC0C1", "\uBB35\uC0C1\xB7\uD050\uD2F0 \uB178\uD2B8 \uD3F4\uB354"],
       ["bible", "\uC131\uACBD", "\uC131\uACBD\uAD6C\uC808 \uB178\uD2B8 \uD3F4\uB354"],
-      ["comm", "\uC8FC\uC11D", "\uC8FC\uC11D\xB7\uAC15\uD574 \uC790\uB8CC \uD3F4\uB354"]
+      ["ref", "\uC790\uB8CC", "\uC5EC\uB7EC \uD1B5\uB85C\uB85C \uBAA8\uC740 \uC77C\uBC18 \uC790\uB8CC\xB7Readwise \uD558\uC774\uB77C\uC774\uD2B8 \uD3F4\uB354"],
+      ["comm", "\uC8FC\uC11D (\uAC80\uC0C9\uC5D0\uC11C \uC81C\uC678)", "\uC8FC\uC11D\xB7\uAC15\uD574 \uD3F4\uB354 \u2014 \uC704\uC82F \uAE30\uBCF8 \uC124\uC815\uC5D0\uC11C \uAC80\uC0C9 \uACB0\uACFC\uC5D0 \uD45C\uC2DC\uB418\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4 (\uC704\uC82F \uC124\uC815 '\uC8FC\uC11D \uB178\uD2B8 \uC228\uAE30\uAE30'\uC5D0\uC11C \uD574\uC81C \uAC00\uB2A5)"]
     ];
     for (const [key, name, desc] of defs) {
       this.catSections[key] = { el: containerEl.createDiv({ cls: "a4p-cat-section" }), name, desc };
@@ -445,12 +446,13 @@ var A4PSettingTab = class extends import_obsidian4.PluginSettingTab {
   }
   /** 볼트 폴더명을 스캔해 카테고리별 후보 폴더를 찾는다. 조각을 먼저 잡아 '설교조각'이 설교로 새지 않게 한다. */
   detectCategoryFolders() {
-    const buckets = { sermon: [], frag: [], devo: [], bible: [], comm: [] };
+    const buckets = { sermon: [], frag: [], devo: [], bible: [], ref: [], comm: [] };
     const rules = [
       ["frag", /조각/],
       ["bible", /성경/],
       ["devo", /묵상|큐티|qt/i],
       ["comm", /주석|강해/],
+      ["ref", /reference|readwise|자료/i],
       ["sermon", /설교|sermon/i]
     ];
     for (const f of this.app.vault.getAllLoadedFiles()) {
@@ -465,7 +467,7 @@ var A4PSettingTab = class extends import_obsidian4.PluginSettingTab {
     }
     const d = this.plugin.settings.cats;
     const pick = (key) => buckets[key].length ? buckets[key].slice(0, 6) : [...d[key]];
-    return { sermon: pick("sermon"), frag: pick("frag"), devo: pick("devo"), bible: pick("bible"), comm: pick("comm") };
+    return { sermon: pick("sermon"), frag: pick("frag"), devo: pick("devo"), bible: pick("bible"), ref: pick("ref"), comm: pick("comm") };
   }
   // ---------- 상태 대시보드 (실검증 프로브) ----------
   async renderDashboard() {
@@ -596,7 +598,7 @@ var A4PSettingTab = class extends import_obsidian4.PluginSettingTab {
 };
 
 // src/main.ts
-var CATEGORY_KEYS = ["sermon", "frag", "devo", "bible", "comm"];
+var CATEGORY_KEYS = ["sermon", "frag", "devo", "bible", "ref", "comm"];
 var DEFAULT_SETTINGS = {
   bibleFormat: "{\uC57D\uC5B4}{\uC7A5}_{\uC808}",
   cats: {
@@ -604,6 +606,7 @@ var DEFAULT_SETTINGS = {
     frag: ["\uC124\uAD50\uC870\uAC01", "\uAC15\uC758\uC870\uAC01"],
     devo: ["\uBB35\uC0C1", "\uD050\uD2F0", "QT"],
     bible: ["\uC131\uACBD"],
+    ref: ["700. Reference", "800. Readwise"],
     comm: ["\uC8FC\uC11D", "\uAC15\uD574"]
   },
   onboarded: false

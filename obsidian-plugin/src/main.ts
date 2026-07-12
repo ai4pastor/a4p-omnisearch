@@ -8,7 +8,7 @@ import {
 	resolveRestPortConflict,
 } from "./probe";
 
-export type CategoryKey = "sermon" | "frag" | "devo" | "bible" | "comm";
+export type CategoryKey = "sermon" | "frag" | "devo" | "bible" | "ref" | "comm";
 
 /** 내부 저장용: 카테고리별 폴더 목록 (행 단위 UI). */
 export type CategoryFolders = Record<CategoryKey, string[]>;
@@ -16,7 +16,7 @@ export type CategoryFolders = Record<CategoryKey, string[]>;
 /** 설정 코드 wire format: 콤마 join 문자열 (유저스크립트 하위호환). */
 export type CategoryPaths = Record<CategoryKey, string>;
 
-export const CATEGORY_KEYS: CategoryKey[] = ["sermon", "frag", "devo", "bible", "comm"];
+export const CATEGORY_KEYS: CategoryKey[] = ["sermon", "frag", "devo", "bible", "ref", "comm"];
 
 interface A4PSettings {
 	bibleFormat: string;
@@ -31,6 +31,7 @@ const DEFAULT_SETTINGS: A4PSettings = {
 		frag: ["설교조각", "강의조각"],
 		devo: ["묵상", "큐티", "QT"],
 		bible: ["성경"],
+		ref: ["700. Reference", "800. Readwise"],
 		comm: ["주석", "강해"],
 	},
 	onboarded: false,

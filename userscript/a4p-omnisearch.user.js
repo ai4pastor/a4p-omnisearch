@@ -5,8 +5,8 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.4.0
-// @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/주석), 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
+// @version      1.5.0
+// @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/자료), 주석 노트 기본 제외, 카테고리 다양성 정렬, 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
 // @contributor  Simon Cambier (original "Obsidian Omnisearch in Google" — https://github.com/scambier/userscripts)
@@ -48,7 +48,7 @@
     document.documentElement.setAttribute("data-a4p-omnisearch", "1");
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.4.0";
+    const VERSION = "1.5.0";
     const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
@@ -84,7 +84,7 @@
         sort: "score",     // score | name | vault
         minRel: 0,         // 0..100 (% of top score)
         type: "all",       // all | md | pdf | img
-        cat: "all",        // 목회 카테고리: all | sermon | frag | devo | bible | comm
+        cat: "all",        // 목회 카테고리: all | sermon | frag | devo | bible | ref
         refine: "",        // overrides the URL query when set
         mode: "auto",      // 화면 모드: auto(OS 따라감) | light | dark — 헤더 ◐ 버튼으로 순환
         expanded: new Set(),
@@ -94,13 +94,14 @@
     };
 
     // 목회 카테고리 정의: key → [라벨, 설정 필드명]. 경로 키워드는 설정에서 로드(S.catKeywords).
+    // v1.5.0: '주석' 칩 제거(catComm은 제외 키워드로 의미 전환), '자료' 칩 신설.
     const CATS = [
         ["all",    "전체",  null],
         ["sermon", "설교",  "catSermon"],
         ["frag",   "조각",  "catFrag"],
         ["devo",   "묵상",  "catDevo"],
         ["bible",  "성경",  "catBible"],
-        ["comm",   "주석",  "catComm"],
+        ["ref",    "자료",  "catRef"],
     ];
 
     // ---------- helpers ----------
@@ -128,6 +129,10 @@
 
     const breadcrumb = (path) =>
         escapeHtml(String(path ?? "").replace(/\.md$/i, "")).split("/").join(' <span class="om-sep">›</span> ');
+
+    // 노트의 "폴더 경로"만 소문자로 — 카테고리/제외 매칭은 디렉토리 기준(파일명 오탐 방지).
+    const dirOf = (p) => String(p || "").toLowerCase().replace(/\/[^/]*$/, "");
+    const dirMatches = (path, kws) => { const d = dirOf(path); return kws.some((k) => d.includes(k)); };
 
     const extOf = (p) => String(p ?? "").split(".").pop().toLowerCase();
     const matchType = (p, t) => {
@@ -669,7 +674,7 @@
             if (applyGlobal) {
                 if (cfg.bibleFormat) gmc.set("bibleNoteFormat", String(cfg.bibleFormat));
                 if (cfg.cats) {
-                    const catMap = { sermon: "catSermon", frag: "catFrag", devo: "catDevo", bible: "catBible", comm: "catComm" };
+                    const catMap = { sermon: "catSermon", frag: "catFrag", devo: "catDevo", bible: "catBible", ref: "catRef", comm: "catComm" };
                     for (const k in catMap) {
                         if (cfg.cats[k]) gmc.set(catMap[k], String(cfg.cats[k]));
                     }
@@ -1163,7 +1168,10 @@
             catFrag:   { label: "카테고리 키워드 — 조각", type: "text", default: "설교조각,강의조각,변증 조각,옵시디언 조각", title: "설교·강의에서 추출한 조각 메모 폴더 키워드." },
             catDevo:   { label: "카테고리 키워드 — 묵상", type: "text", default: "묵상,큐티,QT", title: "묵상·큐티 노트 폴더 키워드." },
             catBible:  { label: "카테고리 키워드 — 성경", type: "text", default: "성경", title: "성경구절 노트 폴더 키워드." },
-            catComm:   { label: "카테고리 키워드 — 주석", type: "text", default: "주석,강해", title: "주석·강해 자료 폴더 키워드." },
+            catRef:    { label: "카테고리 키워드 — 자료", type: "text", default: "700. Reference,800. Readwise,자료", title: "여러 통로로 모은 일반 자료·Readwise 하이라이트 폴더 키워드." },
+            catComm:   { label: "제외 키워드 — 주석", type: "text", default: "주석,강해", title: "폴더 경로에 이 키워드가 포함된 노트는 검색 결과에서 제외 (아래 '주석 노트 숨기기'가 켜져 있을 때)." },
+            hideComm:  { label: "주석 노트 숨기기", type: "checkbox", default: true, title: "장 단위 통합주석처럼 절 링크가 많은 주석 노트가 결과를 도배하지 않도록 기본 제외. 끄면 주석 노트도 결과에 표시." },
+            diversify: { label: "성경구절 검색 시 카테고리 골고루 표시", type: "checkbox", default: true, title: "구절 검색 결과를 설교→조각→묵상→자료 순으로 교차 배치해 한 종류가 상위를 독점하지 않게 함." },
 
             nbResults: { section: ["General settings", "공통 설정. 라벨에 마우스를 올리면 한국어 설명이 나옵니다."], label: "Results to display", type: "int", default: 10, title: "필터·정렬 후 보여줄 결과 개수." },
             excerptLines: { label: "Excerpt lines (click to expand)", type: "int", default: 3, title: "본문 미리보기 줄 수. 카드의 미리보기를 클릭하면 펼쳐짐." },
@@ -1306,8 +1314,11 @@
             frag:   kwList("catFrag"),
             devo:   kwList("catDevo"),
             bible:  kwList("catBible"),
-            comm:   kwList("catComm"),
+            ref:    kwList("catRef"),
+            comm:   kwList("catComm"), // 칩이 아니라 '주석 제외' 필터용 (v1.5.0)
         };
+        S.hideComm = !!gmc.get("hideComm");
+        S.diversify = !!gmc.get("diversify");
         // 구절 노트 직접 조회용 — REST 경로에는 원본 대소문자·경로가 필요해서 lowercase 없이 따로 보관
         S.catBibleRaw = String(gmc.get("catBible") || "").split(",").map((s) => s.trim()).filter(Boolean);
     }
@@ -1438,6 +1449,11 @@
         if (S.excludeFolders.length) {
             v = v.filter((r) => !S.excludeFolders.some((f) => String(r.path || "").toLowerCase().includes(f)));
         }
+        // 주석 제외 (v1.5.0): 장 단위 통합주석이 구절 검색을 도배하지 않도록 기본 숨김.
+        // 디렉토리 경로만 매칭해 "주석에 대한 생각.md" 같은 파일명 오탐 방지. 핀(구절 노트)은 항상 통과.
+        if (S.hideComm && S.catKeywords.comm.length) {
+            v = v.filter((r) => r._pinned || !dirMatches(r.path, S.catKeywords.comm));
+        }
         // 접힌 패널 속 필터(타입·최소 관련도)는 눈에 안 보인 채 결과를 숨길 수 있어 집계해서 안내한다.
         let hiddenInvisible = 0;
         if (state.type !== "all") {
@@ -1450,10 +1466,7 @@
         // 파일명은 제외 — "300. Sermons/성경적 세계관.md"가 '성경' 칩에 걸리는 오분류 방지.
         if (state.cat !== "all") {
             const kws = S.catKeywords[state.cat] || [];
-            if (kws.length) v = v.filter((r) => {
-                const dir = String(r.path || "").toLowerCase().replace(/\/[^/]*$/, "");
-                return kws.some((k) => dir.includes(k));
-            });
+            if (kws.length) v = v.filter((r) => dirMatches(r.path, kws));
         }
 
         state.topScore = Math.max(1, ...state.raw.map((r) => Number(r.score) || 0)); // 렌더 폴백용
@@ -1464,19 +1477,45 @@
         }
         state.hiddenByFilters = hiddenInvisible;
 
+        // 성경구절 검색용 비교자: 메인/보조(aux)는 score 스케일이 달라 그룹으로 나눠 배치.
+        // 순수 구절 쿼리("요 3:16")는 구절노트·인용노트(aux)가 본론이라 먼저, 혼합 쿼리는 메인 먼저.
+        const bibleCompare = () => {
+            const auxFirst = state.bibleRef.refOnly ? 1 : 0;
+            return (a, b) =>
+                (b._pinned ? 1 : 0) - (a._pinned ? 1 : 0) // 직접 조회한 구절 노트가 항상 최상단
+                || (auxFirst ? (b._aux ? 1 : 0) - (a._aux ? 1 : 0) : (a._aux ? 1 : 0) - (b._aux ? 1 : 0))
+                || (b._rel || 0) - (a._rel || 0)
+                || (Number(b.score) || 0) - (Number(a.score) || 0);
+        };
         if (state.sort === "name") {
             v.sort((a, b) => String(a.basename).localeCompare(String(b.basename)));
         } else if (state.sort === "vault") {
             v.sort((a, b) => String(a.vault).localeCompare(String(b.vault)) || (b.score - a.score));
+        } else if (state.bibleRef && S.diversify && state.cat === "all") {
+            // 다양성 정렬 (v1.5.0): 한 카테고리(예: 성경 구절 노트)가 상위를 독점하지 않도록
+            // 설교→조각→묵상→자료→기타 순 라운드로빈 교차 배치. 버킷 내부는 기존 정렬 유지.
+            v.sort(bibleCompare());
+            // first-match 분류 — frag를 sermon보다 먼저: '설교' 키워드가 '설교조각' 폴더에도 걸리는 오분류 방지.
+            const CLASSIFY_ORDER = ["frag", "bible", "devo", "ref", "sermon"];
+            const pinned = [], buckets = { sermon: [], frag: [], devo: [], bible: [], ref: [], etc: [] };
+            for (const r of v) {
+                if (r._pinned) { pinned.push(r); continue; }
+                const c = CLASSIFY_ORDER.find((k) => dirMatches(r.path, S.catKeywords[k] || [])) || "etc";
+                buckets[c].push(r);
+            }
+            const roundRobin = (lists) => {
+                const out = [];
+                for (let i = 0; lists.some((l) => i < l.length); i++)
+                    for (const l of lists) if (i < l.length) out.push(l[i]);
+                return out;
+            };
+            const rr = roundRobin([buckets.sermon, buckets.frag, buckets.devo, buckets.ref, buckets.etc]);
+            // 성경(구절·인용) 버킷은 로테이션에서 제외 — 순수 구절 쿼리면 본론이라 앞, 혼합 쿼리면 보조라 뒤.
+            v = state.bibleRef.refOnly
+                ? pinned.concat(buckets.bible, rr)
+                : pinned.concat(rr, buckets.bible);
         } else if (state.bibleRef) {
-            // 성경구절 검색: 메인/보조(aux)는 score 스케일이 달라 그룹으로 나눠 배치.
-            // 순수 구절 쿼리("요 3:16")는 구절노트·인용노트(aux)가 본론이라 먼저, 혼합 쿼리는 메인 먼저.
-            const auxFirst = state.bibleRef.refOnly ? 1 : 0;
-            v.sort((a, b) =>
-                (b._pinned ? 1 : 0) - (a._pinned ? 1 : 0) // 직접 조회한 구절 노트가 항상 최상단
-                || (auxFirst ? (b._aux ? 1 : 0) - (a._aux ? 1 : 0) : (a._aux ? 1 : 0) - (b._aux ? 1 : 0))
-                || (b._rel || 0) - (a._rel || 0)
-                || (Number(b.score) || 0) - (Number(a.score) || 0));
+            v.sort(bibleCompare());
         } else {
             v.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
         }
@@ -1907,6 +1946,8 @@
         state.minRel = await getVal("om_minRel", 0);
         state.type = await getVal("om_type", "all");
         state.cat = await getVal("om_cat", "all");
+        // 사라진 칩(구버전 comm 등)이 저장돼 있으면 전체로 복귀 — 안 그러면 칩 없는 필터로 0건 화면
+        if (!CATS.some(([k]) => k === state.cat)) { state.cat = "all"; setVal("om_cat", "all"); }
         state.mode = await getVal("om_mode", "auto");
 
         injectStyles();
