@@ -5,7 +5,7 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.6.0
+// @version      1.6.1
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/자료), 주석 노트 기본 제외, 카테고리 다양성 정렬, 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -48,7 +48,7 @@
     document.documentElement.setAttribute("data-a4p-omnisearch", "1");
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.6.0";
+    const VERSION = "1.6.1";
     const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
@@ -857,6 +857,7 @@
         style.textContent = `
             #${ID} {
                 ${LIGHT_TOKENS}
+                --fs: ${S.fontScale / 100}; /* 글자 크기 배율 — 모든 font-size가 calc(Xpx * var(--fs)) */
                 margin:20px 0; width:100%; min-width:360px; box-sizing:border-box;
                 font-family:"SUIT","SUIT Variable","Pretendard","Apple SD Gothic Neo","Malgun Gothic",Roboto,Arial,sans-serif;
                 color:var(--text);
@@ -878,14 +879,14 @@
                 padding:4px 2px 11px; border-bottom:1px solid var(--line);
             }
             #${ID} .om-h-title {
-                display:flex; align-items:center; gap:6px; font-size:14px; font-weight:800;
+                display:flex; align-items:center; gap:6px; font-size:calc(14px * var(--fs, 1)); font-weight:800;
                 letter-spacing:-0.01em; color:var(--text);
                 white-space:nowrap; flex-shrink:0; /* 제목은 절대 줄바꿈하지 않는다 */
             }
             #${ID} .om-header svg { width:17px; height:17px; }
             #${ID} .om-h-title svg .purple { fill:var(--accent); }
             #${ID} .om-count {
-                font-size:10.5px; font-weight:700; color:var(--accent); flex-shrink:0;
+                font-size:calc(10.5px * var(--fs, 1)); font-weight:700; color:var(--accent); flex-shrink:0;
                 background:rgba(var(--accent-rgb),0.10); padding:2px 8px; border-radius:999px;
                 font-variant-numeric:tabular-nums; white-space:nowrap; cursor:default;
             }
@@ -908,7 +909,7 @@
             #${ID} [data-tip]::after {
                 content:attr(data-tip); position:absolute; top:calc(100% + 7px); right:0;
                 background:var(--text); color:var(--panel);
-                font-size:11px; font-weight:600; line-height:1.4; padding:4px 9px; border-radius:6px;
+                font-size:calc(11px * var(--fs, 1)); font-weight:600; line-height:1.4; padding:4px 9px; border-radius:6px;
                 white-space:nowrap; pointer-events:none; opacity:0; transform:translateY(-2px);
                 transition:opacity .12s ease .2s, transform .12s ease .2s; z-index:10;
             }
@@ -924,7 +925,7 @@
             #${ID} .om-refine {
                 width:100%; box-sizing:border-box; border:1px solid var(--chipline);
                 background:var(--card); color:var(--text); border-radius:8px;
-                padding:7px 10px; font-size:13px; outline:none;
+                padding:7px 10px; font-size:calc(13px * var(--fs, 1)); outline:none;
             }
             #${ID} .om-refine::placeholder { color:var(--faint); }
             #${ID} .om-refine:focus { border-color:var(--accent); }
@@ -932,10 +933,10 @@
             #${ID} .om-seg { display:inline-flex; border:1px solid var(--chipline); border-radius:8px; overflow:hidden; }
             #${ID} .om-seg button {
                 background:var(--card); color:var(--muted); border:none; cursor:pointer;
-                padding:5px 9px; font-size:12px; line-height:1;
+                padding:5px 9px; font-size:calc(12px * var(--fs, 1)); line-height:1;
             }
             #${ID} .om-seg button.active { background:var(--accent); color:var(--on-accent); }
-            #${ID} .om-slider { display:flex; align-items:center; gap:6px; font-size:11px; color:var(--muted); }
+            #${ID} .om-slider { display:flex; align-items:center; gap:6px; font-size:calc(11px * var(--fs, 1)); color:var(--muted); }
             #${ID} .om-slider input[type=range] { width:96px; accent-color:var(--accent); }
 
             /* 결과 목록 — 헤어라인으로 나뉜 에디토리얼 행 (기본 스킨 = Editorial) */
@@ -961,7 +962,6 @@
             }
             #${ID}.skin-clean .om-result:hover, #${ID}.skin-tinted .om-result:hover, #${ID}.skin-solid .om-result:hover { background:var(--card-hover); }
             #${ID}.skin-clean .om-result.selected, #${ID}.skin-tinted .om-result.selected, #${ID}.skin-solid .om-result.selected { border-color:var(--cardc); box-shadow:none; }
-            #${ID}.skin-clean .om-actions, #${ID}.skin-tinted .om-actions, #${ID}.skin-solid .om-actions { right:8px; }
 
             #${ID} .om-link { text-decoration:none; color:inherit; display:block; }
 
@@ -969,7 +969,7 @@
             #${ID} .om-result { --cardc: var(--vc, var(--title, var(--accent))); }
             #${ID} .om-title {
                 display:flex; align-items:center; gap:8px; min-width:0; color:var(--cardc);
-                font-size:14px; font-weight:700; line-height:1.45; margin:0 0 4px;
+                font-size:calc(14px * var(--fs, 1)); font-weight:700; line-height:1.45; margin:0 0 4px;
             }
             #${ID}.vscope-accent .om-title { color:var(--title, var(--text)); }
             #${ID} .om-title-text { min-width:0; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -979,7 +979,7 @@
             }
             #${ID} .om-link:hover .om-title-text { text-decoration:underline; text-underline-offset:3px; }
             #${ID} .om-badge {
-                flex:0 0 auto; font-size:9.5px; font-weight:800; letter-spacing:.05em; text-transform:uppercase;
+                flex:0 0 auto; font-size:calc(9.5px * var(--fs, 1)); font-weight:800; letter-spacing:.05em; text-transform:uppercase;
                 color:var(--cardc); border:1px solid color-mix(in srgb, var(--cardc) 45%, transparent);
                 padding:1px 6px; border-radius:4px; max-width:45%;
                 overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -989,46 +989,35 @@
             #${ID} .om-score { display:flex; align-items:center; gap:6px; margin:4px 0 8px; }
             #${ID} .om-bar { flex:1; height:2px; background:color-mix(in srgb, var(--cardc) 15%, transparent); overflow:hidden; }
             #${ID} .om-bar > i { display:block; height:100%; background:var(--cardc); }
-            #${ID} .om-pct { font-size:10px; color:var(--faint); min-width:30px; text-align:right; font-variant-numeric:tabular-nums; }
+            #${ID} .om-pct { font-size:calc(10px * var(--fs, 1)); color:var(--faint); min-width:30px; text-align:right; font-variant-numeric:tabular-nums; }
 
             /* 발췌 — 하이라이트는 형광펜 대신 포인트색 볼드 */
             #${ID} .om-excerpt {
-                color:var(--muted); font-size:12.5px; line-height:1.65; margin-bottom:7px;
+                color:var(--muted); font-size:calc(12.5px * var(--fs, 1)); line-height:1.65; margin-bottom:7px;
                 display:-webkit-box; -webkit-box-orient:vertical; overflow:hidden; cursor:text;
             }
             #${ID} .om-excerpt.expanded { -webkit-line-clamp:unset; display:block; }
             #${ID} .om-excerpt mark { background:none; color:var(--cardc); font-weight:700; padding:0; }
             #${ID}.vscope-accent .om-excerpt mark { color:var(--text); }
 
-            #${ID} .om-path { color:var(--faint); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+            #${ID} .om-path { color:var(--faint); font-size:calc(11px * var(--fs, 1)); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
             #${ID} .om-path .om-sep { opacity:0.5; padding:0 2px; }
 
             #${ID} .om-terms { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 6px; }
             #${ID} .om-term {
-                font-size:10px; color:var(--cardc); border:1px solid color-mix(in srgb, var(--cardc) 40%, transparent);
+                font-size:calc(10px * var(--fs, 1)); color:var(--cardc); border:1px solid color-mix(in srgb, var(--cardc) 40%, transparent);
                 padding:0 6px; border-radius:4px; line-height:1.6;
             }
             #${ID} .om-tags { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 6px; }
             #${ID} .om-tag {
-                font-size:10px; color:var(--cardc); background:color-mix(in srgb, var(--cardc) 11%, transparent);
+                font-size:calc(10px * var(--fs, 1)); color:var(--cardc); background:color-mix(in srgb, var(--cardc) 11%, transparent);
                 padding:1px 7px; border-radius:999px;
             }
             #${ID} .om-tag::before { content:"#"; opacity:0.5; }
 
-            #${ID} .om-actions {
-                position:absolute; top:9px; right:2px; display:flex; gap:3px;
-                opacity:0; transition:opacity .15s;
-            }
-            #${ID} .om-result:hover .om-actions, #${ID} .om-result.selected .om-actions { opacity:1; }
-            #${ID} .om-act {
-                background:var(--card); border:1px solid var(--chipline); color:var(--muted);
-                border-radius:5px; font-size:10px; padding:2px 6px; cursor:pointer; line-height:1.4;
-            }
-            #${ID} .om-act:hover { border-color:var(--accent); color:var(--accent); }
-
             /* 상태 */
-            #${ID} .om-loading { display:block; text-align:center; color:var(--muted); padding:22px 12px; font-size:13px; }
-            #${ID} .om-error { color:#C0392B; padding:16px 4px; font-size:13px; line-height:1.6; }
+            #${ID} .om-loading { display:block; text-align:center; color:var(--muted); padding:22px 12px; font-size:calc(13px * var(--fs, 1)); }
+            #${ID} .om-error { color:#C0392B; padding:16px 4px; font-size:calc(13px * var(--fs, 1)); line-height:1.6; }
             #${ID} .om-error a { color:var(--accent); text-decoration:none; border-bottom:1px solid rgba(var(--accent-rgb),0.4); }
 
             /* A4P: 목회 카테고리 칩 */
@@ -1036,11 +1025,11 @@
             #${ID} .om-cats button {
                 background:transparent; color:var(--muted); cursor:pointer;
                 border:1px solid var(--chipline); border-radius:999px;
-                padding:4px 11px; font-size:12px; line-height:1; transition:background .15s, color .15s, border-color .15s;
+                padding:4px 11px; font-size:calc(12px * var(--fs, 1)); line-height:1; transition:background .15s, color .15s, border-color .15s;
             }
             #${ID} .om-cats button:hover { border-color:var(--accent); color:var(--text); }
             #${ID} .om-cats button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
-            #${ID} .om-cat-n { margin-left:4px; font-size:10px; opacity:.6; font-variant-numeric:tabular-nums; }
+            #${ID} .om-cat-n { margin-left:4px; font-size:calc(10px * var(--fs, 1)); opacity:.6; font-variant-numeric:tabular-nums; }
             #${ID} .om-cat-n:empty { display:none; }
             #${ID} .om-cats button.om-cat-zero { opacity:.45; }
 
@@ -1051,25 +1040,25 @@
                 border-left:3px solid var(--accent);
                 background:var(--wash); border-radius:0 8px 8px 0;
             }
-            #${ID} .om-bible-title { font-size:14px; font-weight:800; color:var(--text); margin-bottom:8px; }
+            #${ID} .om-bible-title { font-size:calc(14px * var(--fs, 1)); font-weight:800; color:var(--text); margin-bottom:8px; }
             #${ID} .om-bible-actions { display:flex; flex-wrap:wrap; gap:5px; }
             #${ID} .om-bible-actions button {
                 background:var(--card); color:var(--accent); cursor:pointer;
                 border:1px solid rgba(var(--accent-rgb),0.30); border-radius:6px;
-                padding:4px 9px; font-size:12px; font-weight:600; line-height:1.4;
+                padding:4px 9px; font-size:calc(12px * var(--fs, 1)); font-weight:600; line-height:1.4;
             }
             #${ID} .om-bible-actions button:hover { background:var(--accent); border-color:var(--accent); color:var(--on-accent); }
 
             /* A4P: doctrine(신학 태그)·성경구절 칩 */
             #${ID} .om-doctrine, #${ID} .om-verses { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 6px; }
             #${ID} .om-doc {
-                font-size:10px; color:var(--cardc); border:1px dashed color-mix(in srgb, var(--cardc) 45%, transparent);
+                font-size:calc(10px * var(--fs, 1)); color:var(--cardc); border:1px dashed color-mix(in srgb, var(--cardc) 45%, transparent);
                 padding:1px 7px; border-radius:999px;
                 background:transparent; cursor:pointer; line-height:1.5;
             }
             #${ID} .om-doc:hover { background:var(--cardc); border-style:solid; color:var(--on-accent); }
             #${ID} .om-verse {
-                font-size:10px; color:var(--cardc); cursor:pointer; background:transparent;
+                font-size:calc(10px * var(--fs, 1)); color:var(--cardc); cursor:pointer; background:transparent;
                 border:1px dashed color-mix(in srgb, var(--cardc) 50%, transparent);
                 padding:2px 8px; border-radius:999px; line-height:1.5;
             }
@@ -1077,18 +1066,18 @@
             #${ID} .om-verse:hover { background:var(--cardc); border-style:solid; color:var(--on-accent); }
 
             /* A4P: 진단 패널 */
-            #${ID} .om-diag { padding:8px 0; font-size:12.5px; color:var(--text); }
+            #${ID} .om-diag { padding:8px 0; font-size:calc(12.5px * var(--fs, 1)); color:var(--text); }
             #${ID} .om-diag-vault {
                 background:var(--wash); border-radius:8px; padding:10px 12px; margin-bottom:8px; line-height:1.8;
             }
-            #${ID} .om-diag-fix { color:var(--muted); font-size:11.5px; }
-            #${ID} .om-filter-hint { color:var(--muted); font-size:11.5px; padding:6px 2px; border-bottom:1px solid var(--line); }
+            #${ID} .om-diag-fix { color:var(--muted); font-size:calc(11.5px * var(--fs, 1)); }
+            #${ID} .om-filter-hint { color:var(--muted); font-size:calc(11.5px * var(--fs, 1)); padding:6px 2px; border-bottom:1px solid var(--line); }
             #${ID} .om-filter-hint a { color:var(--accent); font-weight:600; text-decoration:none; }
             #${ID} .om-filter-hint a:hover { text-decoration:underline; }
 
             /* v1.6.0: 설교 파일명 날짜·부서 배지 + 더 보기 버튼 */
             #${ID} .om-sermon-badge {
-                flex:0 0 auto; font-size:9.5px; font-weight:700; color:var(--muted);
+                flex:0 0 auto; font-size:calc(9.5px * var(--fs, 1)); font-weight:700; color:var(--muted);
                 background:var(--wash); border:1px solid var(--line);
                 padding:1px 6px; border-radius:4px; white-space:nowrap;
                 font-variant-numeric:tabular-nums;
@@ -1096,11 +1085,11 @@
             #${ID} .om-more {
                 display:block; width:100%; margin:10px 0 2px; padding:7px 0;
                 background:transparent; border:1px dashed var(--chipline); border-radius:8px;
-                color:var(--muted); font-size:12px; cursor:pointer;
+                color:var(--muted); font-size:calc(12px * var(--fs, 1)); cursor:pointer;
                 transition:border-color .15s, color .15s;
             }
             #${ID} .om-more:hover { border-color:var(--accent); color:var(--accent); }
-            #${ID} .om-diag-foot { text-align:center; color:var(--faint); font-size:11px; padding-top:4px; }
+            #${ID} .om-diag-foot { text-align:center; color:var(--faint); font-size:calc(11px * var(--fs, 1)); padding-top:4px; }
 
             /* 플로팅 패널 (네이버 폴백 · 유튜브 · Bing 폴백) — 위젯이 종이 패널 위에 얹힘 */
             #a4p-float {
@@ -1115,7 +1104,7 @@
             /* Toast */
             #om-toast {
                 position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(12px);
-                background:#1C1B18; color:#FBFAF7; padding:8px 14px; border-radius:8px; font-size:13px;
+                background:#1C1B18; color:#FBFAF7; padding:8px 14px; border-radius:8px; font-size:calc(13px * var(--fs, 1));
                 font-family:"SUIT","Pretendard","Apple SD Gothic Neo",Roboto,Arial,sans-serif; box-shadow:0 4px 16px rgba(0,0,0,0.3);
                 opacity:0; pointer-events:none; transition:opacity .2s, transform .2s; z-index:99999;
                 max-width:60vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -1220,6 +1209,7 @@
             diversify: { label: "성경구절 검색 시 카테고리 골고루 표시", type: "checkbox", default: true, title: "구절 검색 결과를 설교→조각→묵상→자료 순으로 교차 배치해 한 종류가 상위를 독점하지 않게 함." },
 
             nbResults: { section: ["General settings", "공통 설정. 라벨에 마우스를 올리면 한국어 설명이 나옵니다."], label: "Results to display", type: "int", default: 10, title: "필터·정렬 후 보여줄 결과 개수." },
+            fontScale: { label: "Font size (%)", type: "int", default: 110, title: "위젯 글자 크기 배율(%). 100=원래 크기, 110=10% 크게(기본). 범위 80~150." },
             excerptLines: { label: "Excerpt lines (click to expand)", type: "int", default: 3, title: "본문 미리보기 줄 수. 카드의 미리보기를 클릭하면 펼쳐짐." },
             showScore: { label: "Show relevance bar", type: "checkbox", default: true, title: "관련도(BM25) 막대와 % 표시." },
             showPath: { label: "Show path breadcrumb", type: "checkbox", default: true, title: "노트 경로를 브레드크럼으로 표시." },
@@ -1260,6 +1250,7 @@
                 };
                 const gen = {
                     nbResults: "필터·정렬 후 보여줄 결과 개수.",
+                    fontScale: "위젯 글자 크기 배율(%). 100=원래, 110=10% 크게(기본). 범위 80~150.",
                     excerptLines: "본문 미리보기 줄 수. 미리보기를 클릭하면 펼쳐짐.",
                     showScore: "관련도(BM25) 막대와 % 표시.",
                     showPath: "노트 경로를 브레드크럼으로 표시.",
@@ -1319,6 +1310,7 @@
             }
         }
         S.nbResults = Math.max(1, parseInt(gmc.get("nbResults"), 10) || 10);
+        S.fontScale = Math.max(80, Math.min(150, parseInt(gmc.get("fontScale"), 10) || 110));
         S.excerptLines = Math.max(1, parseInt(gmc.get("excerptLines"), 10) || 3);
         S.showScore = !!gmc.get("showScore");
         S.showPath = !!gmc.get("showPath");
@@ -1885,22 +1877,8 @@
             $(this).toggleClass("expanded");
         });
 
-        // per-result copy actions
-        $(document).on("click", `#${ID} .om-act`, function (e) {
-            e.preventDefault(); e.stopPropagation();
-            const card = $(this).closest(".om-result");
-            const item = state.view[$(`#${ID} .om-result`).index(card)];
-            if (!item) return;
-            const a = $(this).data("a");
-            if (a === "name") copyText(item.basename);
-            else if (a === "rel") copyText(item.path);
-            else if (a === "abs") {
-                const abs = absPath(item);
-                if (abs) copyText(abs);
-                else toast("이 볼트의 루트 경로가 설정되지 않았습니다 (⋯ 설정 → 볼트 루트)");
-            }
-            else if (a === "cite") copyCitation(item, card);
-        });
+        // 카드 호버 복사 버튼(인용/name/rel/abs)은 v1.6.1에서 제거 — 배지·태그를 가리고
+        // 실사용이 없었음 (사용자 결정). 복사는 키보드 y(위키링크)/c(인용)로 계속 가능.
     }
 
     function showLoading() {
@@ -2010,12 +1988,6 @@
             const sermonBadge = sm ? `<span class="om-sermon-badge">${sm.date} · ${sm.dept}</span>` : "";
             const card = $(`
                 <div class="om-result"${vcStyle}>
-                    <div class="om-actions">
-                        <button class="om-act" data-a="cite" title="설교문에 붙일 인용 복사 (“발췌” — [[노트명]])">인용</button>
-                        <button class="om-act" data-a="name" title="노트 이름 복사">name</button>
-                        <button class="om-act" data-a="rel" title="볼트 상대경로 복사">rel</button>
-                        <button class="om-act" data-a="abs" title="절대경로 복사">abs</button>
-                    </div>
                     <a class="om-link" href="${escapeHtml(url)}">
                         <h3 class="om-title"><span class="om-title-text">${escapeHtml(dispTitle)}</span>${sermonBadge}${badge}</h3>
                         ${scoreHtml}

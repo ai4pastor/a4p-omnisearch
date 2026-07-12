@@ -1,4 +1,4 @@
-// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 131케이스
+// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 136케이스
 // 실행 준비: npm install   (레포 루트에서 — devDependencies: jsdom, jquery)
 // 실행:      npm test  (파서 테스트 포함)  또는  node test/widget-smoke.mjs
 // 검증 범위: 4개 엔진 마운트 위치, 에디토리얼 스킨/테마 클래스, 카테고리 칩,
@@ -10,6 +10,7 @@
 //            설정 코드 cats.ref, om_cat 잔존값 마이그레이션.
 // v1.6.0 추가: 칩 건수 배지, 더 보기, 설교 파일명 배지, doctrine 재검색, 콜론형 인용 병행,
 //            검색 결과 캐시(SWR), .om-result 인덱스 정합, enrich _note 캐시.
+// v1.6.1 추가: 카드 호버 복사 버튼 제거, 글자 크기 배율(기본 110%·클램프).
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import { createRequire } from "module";
@@ -492,15 +493,36 @@ console.log("\n[v1.6.0] .om-result 인덱스 정합 (필터 힌트가 끼어도 
     { score: 100, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
     { score: 40, vault: "csh_remote", path: "300. Sermons/설교B.md", basename: "설교B", excerpt: "…" },
   ]);
+  const respond = (u) => (decodeURIComponent(u).includes("/vault/") || u.includes("/open/") ? JSON.stringify({ content: "" }) : resp);
   // minRel 50 → 설교B 숨김 + .om-filter-hint가 리스트 맨 앞에 삽입되는 상황
-  const env = await makeEnv({ q: "설교", respond: () => resp, gmStore: { om_minRel: 50 } });
-  check("필터 힌트 존재 (전제)", env.$(`#OmnisearchObsidianResults .om-filter-hint`).length === 1);
-  let copied = "";
-  Object.defineProperty(env.window.navigator, "clipboard", {
-    value: { writeText: (t) => { copied = t; return Promise.resolve(); } }, configurable: true,
+  const env = await makeEnv({
+    q: "설교", respond, gmStore: { om_minRel: 50 },
+    gmValues: { v1_port: "51361", v1_vault: "csh_remote", v1_lrPort: "27123", v1_lrKey: "k", useLocalRest: true },
   });
-  env.$(`#OmnisearchObsidianResults .om-result`).first().find(`.om-act[data-a="name"]`).trigger("click");
-  check("힌트가 끼어도 첫 카드 = 설교A 복사 (구버전은 어긋남)", copied === "설교A");
+  check("필터 힌트 존재 (전제)", env.$(`#OmnisearchObsidianResults .om-filter-hint`).length === 1);
+  env.$(`#OmnisearchObsidianResults .om-result`).first().find(".om-link")
+    .trigger(env.$.Event("click", { button: 0 })); // 좌클릭 명시 (핸들러의 수정키·버튼 가드 통과)
+  await new Promise((r) => setTimeout(r, 100));
+  const openCalls = env.calls.xhrUrls.filter((u) => u.includes("/open/"));
+  check("힌트가 끼어도 첫 카드 = 설교A 열기 (구버전은 어긋나 미동작)", openCalls.length === 1 && decodeURIComponent(openCalls[0]).includes("설교A.md"));
+}
+
+console.log("\n[v1.6.1] 카드 호버 복사 버튼 제거 (배지·태그 가림 문제)");
+{
+  const env = await makeEnv({ q: "사랑" });
+  check("카드에 .om-actions/.om-act 부재", env.$(`#OmnisearchObsidianResults .om-actions, #OmnisearchObsidianResults .om-act`).length === 0);
+}
+
+console.log("\n[v1.6.1] 글자 크기 배율 (기본 110%, 설정 가능)");
+{
+  const styleOf = (env) => Array.from(env.window.document.querySelectorAll("style")).map((s) => s.textContent).join("\n");
+  const env = await makeEnv({ q: "사랑" });
+  check("기본 배율 --fs: 1.1 (10% 확대)", styleOf(env).includes("--fs: 1.1;"));
+  check("font-size가 배율 calc 사용", styleOf(env).includes("font-size:calc(") && styleOf(env).includes("var(--fs, 1)"));
+  const env2 = await makeEnv({ q: "사랑", gmValues: { fontScale: 130 } });
+  check("설정 130% → --fs: 1.3", styleOf(env2).includes("--fs: 1.3;"));
+  const env3 = await makeEnv({ q: "사랑", gmValues: { fontScale: 999 } });
+  check("범위 밖 값은 150%로 클램프", styleOf(env3).includes("--fs: 1.5;"));
 }
 
 console.log("\n[v1.6.0] 설교 파일명 배지 (날짜·부서)");

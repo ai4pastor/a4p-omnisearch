@@ -1,8 +1,14 @@
 # RESUME — 다음 세션 이어가기
 
-> 마지막 갱신: 2026-07-12 (세션 6 — v1.5.0 검색체계 개편 + v1.6.0 고도화 6종)
+> 마지막 갱신: 2026-07-12 (세션 6 — v1.5.0 검색체계 개편 + v1.6.0 고도화 6종 + v1.6.1 UI 피드백)
 
-## 최신: v1.6.0 — 고도화 6종 (유저스크립트만 코드 변경, 플러그인은 버전 통일 bump)
+## 최신: v1.6.1 — 실기기 피드백 2건 (유저스크립트만, raw 푸시 배포 — 릴리스는 다음 플러그인 변경 때 통일)
+
+- **카드 호버 복사 버튼(인용/name/rel/abs) 제거** — 설교 날짜 배지·태그를 가리고 실사용 없음(사용자 스크린샷 피드백). 복사는 키보드 `y`(위키링크)/`c`(인용)로 유지. `copyCitation`/`absPath` 함수는 키보드·설정 연계로 존치.
+- **글자 크기 설정** — 구글 검색결과 대비 너무 작다는 피드백. 위젯 CSS의 font-size 28곳을 `calc(Xpx * var(--fs, 1))`로 일괄 변환(설정 대화상자 CONFIG_CSS는 제외), 루트에 `--fs` 주입. 설정 `fontScale`(int %, **기본 110** = 10% 확대, 80~150 클램프).
+- 검증: 파서 25/25 · 스모크 **136/136**(인덱스 정합 테스트를 REST /open/ 관측 방식으로 재작성 — .om-link 클릭은 `$.Event("click",{button:0})` 필요).
+
+## 이전: v1.6.0 — 고도화 6종 (유저스크립트만 코드 변경, 플러그인은 버전 통일 bump)
 
 1. **칩 건수 배지** — `state.catCounts`(applyPipeline에서 "그 칩을 눌렀을 때 볼 건수" 계산) + `renderCatCounts()`. 0건 칩은 `om-cat-zero` 흐림(클릭은 가능 — 핀 늦은 합류 대비 + 빈 카테고리 복귀 링크 전제).
 2. **더 보기** — `state.limit`/`state.filteredCount`, slice(0, limit). `resetLimit()`은 결과 집합이 바뀌는 제스처(검색·칩·타입·minRel·리셋 링크)에서만, 정렬 변경은 유지. **기존 인덱스 버그 동시 수정**: `.om-link`/`.om-act`가 형제 기준 `.index()`를 쓰던 것을 `.om-result` 집합 기준으로 — `.om-filter-hint`/`.om-more`가 끼면 엉뚱한 노트가 열리던 문제.
@@ -81,6 +87,6 @@
 ## 검증 스위트
 
 - `node --check userscript/a4p-omnisearch.user.js` + `node test/bible-parser.test.mjs` (25/25)
-- `npm test` — 위젯 스모크 131/131 (jsdom, 멀티볼트 온보딩·정렬·카테고리·진단·주석 제외·다양성 정렬·칩 배지·더 보기·캐시 케이스 포함)
+- `npm test` — 위젯 스모크 136/136 (jsdom, 멀티볼트 온보딩·정렬·카테고리·진단·주석 제외·다양성 정렬·칩 배지·더 보기·캐시·글자 배율 케이스 포함)
 - `cd obsidian-plugin && npm run build`
 - 배포 절차: 유저스크립트 = @version bump + push (자동 업데이트). 플러그인 = 버전 bump(manifest×2·package·versions.json) + build + **새 GitHub 릴리스** (BRAT).
