@@ -5,7 +5,7 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.5.0
+// @version      1.6.0
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/자료), 주석 노트 기본 제외, 카테고리 다양성 정렬, 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -48,7 +48,7 @@
     document.documentElement.setAttribute("data-a4p-omnisearch", "1");
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.5.0";
+    const VERSION = "1.6.0";
     const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
@@ -91,6 +91,9 @@
         vaultsSeen: 0,
         bibleRef: null,    // parseBibleRef() 결과 (성경구절 고정 카드용)
         firstVault: "",    // 딥링크 폴백용 첫 결과의 볼트명
+        catCounts: null,   // 카테고리 칩 건수 배지 (applyPipeline에서 계산)
+        limit: 0,          // "더 보기" 표시 상한 (0 = S.nbResults 사용)
+        filteredCount: 0,  // slice 전 필터 통과 총 건수 (더 보기 남은 건수 계산용)
     };
 
     // 목회 카테고리 정의: key → [라벨, 설정 필드명]. 경로 키워드는 설정에서 로드(S.catKeywords).
@@ -133,6 +136,18 @@
     // 노트의 "폴더 경로"만 소문자로 — 카테고리/제외 매칭은 디렉토리 기준(파일명 오탐 방지).
     const dirOf = (p) => String(p || "").toLowerCase().replace(/\/[^/]*$/, "");
     const dirMatches = (path, kws) => { const d = dirOf(path); return kws.some((k) => d.includes(k)); };
+
+    // 설교 파일명 규칙(YYMMDD_부서_제목)을 파싱해 날짜·부서 배지를 만든다 (v1.6.0).
+    // basename 원본은 절대 가공하지 않음 — 위키링크 복사·열기·인용은 원본을 쓴다.
+    const SERMON_DEPTS = { "대": "대예배", "청": "청소년부", "어": "어린이부" };
+    const SERMON_RE = /^(\d{2})(\d{2})(\d{2})[._\- ]?(대|청|어)(?:예배|소년부|린이부)?[._\- ]\s*(.+)$/;
+    function sermonMeta(basename) {
+        const m = SERMON_RE.exec(String(basename || ""));
+        if (!m) return null;
+        const mm = +m[2], dd = +m[3];
+        if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return null; // 날짜가 아닌 숫자 prefix 오탐 차단
+        return { date: `20${m[1]}-${m[2]}-${m[3]}`, dept: SERMON_DEPTS[m[4]], title: m[5].trim() };
+    }
 
     const extOf = (p) => String(p ?? "").split(".").pop().toLowerCase();
     const matchType = (p, t) => {
@@ -494,52 +509,63 @@
     }
 
     let _restShape = false; // log the note shape once, to help diagnose variants
+
+    // 받아 온 노트로 카드 하나를 패치 — 본문 미리보기·태그·doctrine·성경구절 칩.
+    function patchCard(card, note, query) {
+        if (note.content) card.find(".om-excerpt").html(bodyPreview(note.content, query));
+        if (S.showTags) {
+            const tags = notesTags(note).slice(0, S.maxTags);
+            let box = card.find(".om-tags");
+            const html = tags.map((t) => `<span class="om-tag">${escapeHtml(t)}</span>`).join("");
+            if (tags.length) {
+                if (box.length) box.html(html);
+                else card.find(".om-excerpt").after(`<div class="om-tags">${html}</div>`);
+            } else box.remove();
+        }
+        // A4P: frontmatter의 WORD doctrine(🔖 신학 태그)과 성경구절 배열을 칩으로 표시.
+        // doctrine 칩 클릭 = 그 주제로 재검색, 성경구절 칩 클릭 = 해당 구절 노트 열기.
+        const fm = note.frontmatter || note.properties || {};
+        const stripLink = (s) => String(s).replace(/\[\[|\]\]/g, "").replace(/🔖/g, "").trim();
+        const asList = (v) => (Array.isArray(v) ? v : (v ? [v] : [])).map(stripLink).filter(Boolean);
+        if (S.showDoctrine) {
+            const doc = asList(fm.doctrine);
+            card.find(".om-doctrine").remove();
+            if (doc.length) {
+                const html = doc.slice(0, 6).map((t) =>
+                    `<button class="om-doc" data-q="${escapeHtml(t)}" title="이 주제로 다시 검색">✝️ ${escapeHtml(t)}</button>`).join("");
+                card.find(".om-excerpt").after(`<div class="om-doctrine">${html}</div>`);
+            }
+        }
+        if (S.showVerseChips) {
+            const verses = asList(fm["성경구절"]);
+            card.find(".om-verses").remove();
+            if (verses.length) {
+                const html = verses.slice(0, 8).map((v) =>
+                    `<button class="om-verse" data-note="${escapeHtml(v)}" title="구절 노트 열기">${escapeHtml(v)}</button>`).join("");
+                const anchor = card.find(".om-doctrine");
+                (anchor.length ? anchor : card.find(".om-excerpt")).after(`<div class="om-verses">${html}</div>`);
+            }
+        }
+    }
+
     // After cards render, pull the real note (body + tags) for each visible result and patch it in.
     function enrichResults() {
         if (!S.useLocalRest) return;
         const cards = $(`#${ID} .om-result`);
         const query = baseQuery();
-        const cap = Math.min(state.view.length, 30); // avoid hammering on huge nbResults
+        // "더 보기"로 30을 넘겨도 새로 노출된 카드가 enrich되도록 상한 확장 — 이미 받은 노트는
+        // item._note 캐시로 재요청 없이 패치하므로 신규 fetch는 회당 nbResults건 이내.
+        const cap = Math.min(state.view.length, Math.max(30, state.limit || 0));
         for (let i = 0; i < cap; i++) {
             const item = state.view[i];
             if (!item || !item._restPort || !item._restKey) continue;
             const card = cards.eq(i);
+            if (item._note) { patchCard(card, item._note, query); continue; }
             fetchNote({ port: item._restPort, key: item._restKey }, item.path).then((note) => {
                 if (!note) return;
                 if (!_restShape) { _restShape = true; console.log("[Omnisearch CMDS] Local REST note keys:", Object.keys(note), "| tags:", note.tags, "| frontmatter.tags:", (note.frontmatter || {}).tags); }
-                if (note.content) card.find(".om-excerpt").html(bodyPreview(note.content, query));
-                if (S.showTags) {
-                    const tags = notesTags(note).slice(0, S.maxTags);
-                    let box = card.find(".om-tags");
-                    const html = tags.map((t) => `<span class="om-tag">${escapeHtml(t)}</span>`).join("");
-                    if (tags.length) {
-                        if (box.length) box.html(html);
-                        else card.find(".om-excerpt").after(`<div class="om-tags">${html}</div>`);
-                    } else box.remove();
-                }
-                // A4P: frontmatter의 WORD doctrine(🔖 신학 태그)과 성경구절 배열을 칩으로 표시.
-                // 성경구절 칩을 클릭하면 해당 구절 노트가 열려 설교↔구절 연결망을 브라우저에서 바로 탐색.
-                const fm = note.frontmatter || note.properties || {};
-                const stripLink = (s) => String(s).replace(/\[\[|\]\]/g, "").replace(/🔖/g, "").trim();
-                const asList = (v) => (Array.isArray(v) ? v : (v ? [v] : [])).map(stripLink).filter(Boolean);
-                if (S.showDoctrine) {
-                    const doc = asList(fm.doctrine);
-                    card.find(".om-doctrine").remove();
-                    if (doc.length) {
-                        const html = doc.slice(0, 6).map((t) => `<span class="om-doc">✝️ ${escapeHtml(t)}</span>`).join("");
-                        card.find(".om-excerpt").after(`<div class="om-doctrine">${html}</div>`);
-                    }
-                }
-                if (S.showVerseChips) {
-                    const verses = asList(fm["성경구절"]);
-                    card.find(".om-verses").remove();
-                    if (verses.length) {
-                        const html = verses.slice(0, 8).map((v) =>
-                            `<button class="om-verse" data-note="${escapeHtml(v)}" title="구절 노트 열기">${escapeHtml(v)}</button>`).join("");
-                        const anchor = card.find(".om-doctrine");
-                        (anchor.length ? anchor : card.find(".om-excerpt")).after(`<div class="om-verses">${html}</div>`);
-                    }
-                }
+                item._note = note; // 재렌더(칩 클릭·더 보기·정렬) 시 네트워크 없이 재패치
+                patchCard(card, note, query);
             });
         }
     }
@@ -1014,6 +1040,9 @@
             }
             #${ID} .om-cats button:hover { border-color:var(--accent); color:var(--text); }
             #${ID} .om-cats button.active { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+            #${ID} .om-cat-n { margin-left:4px; font-size:10px; opacity:.6; font-variant-numeric:tabular-nums; }
+            #${ID} .om-cat-n:empty { display:none; }
+            #${ID} .om-cats button.om-cat-zero { opacity:.45; }
 
             /* A4P: 성경구절 고정 카드 — 좌측 잉크 룰 인용 블록 */
             #${ID} .om-bible { display:none; }
@@ -1036,7 +1065,9 @@
             #${ID} .om-doc {
                 font-size:10px; color:var(--cardc); border:1px dashed color-mix(in srgb, var(--cardc) 45%, transparent);
                 padding:1px 7px; border-radius:999px;
+                background:transparent; cursor:pointer; line-height:1.5;
             }
+            #${ID} .om-doc:hover { background:var(--cardc); border-style:solid; color:var(--on-accent); }
             #${ID} .om-verse {
                 font-size:10px; color:var(--cardc); cursor:pointer; background:transparent;
                 border:1px dashed color-mix(in srgb, var(--cardc) 50%, transparent);
@@ -1054,6 +1085,21 @@
             #${ID} .om-filter-hint { color:var(--muted); font-size:11.5px; padding:6px 2px; border-bottom:1px solid var(--line); }
             #${ID} .om-filter-hint a { color:var(--accent); font-weight:600; text-decoration:none; }
             #${ID} .om-filter-hint a:hover { text-decoration:underline; }
+
+            /* v1.6.0: 설교 파일명 날짜·부서 배지 + 더 보기 버튼 */
+            #${ID} .om-sermon-badge {
+                flex:0 0 auto; font-size:9.5px; font-weight:700; color:var(--muted);
+                background:var(--wash); border:1px solid var(--line);
+                padding:1px 6px; border-radius:4px; white-space:nowrap;
+                font-variant-numeric:tabular-nums;
+            }
+            #${ID} .om-more {
+                display:block; width:100%; margin:10px 0 2px; padding:7px 0;
+                background:transparent; border:1px dashed var(--chipline); border-radius:8px;
+                color:var(--muted); font-size:12px; cursor:pointer;
+                transition:border-color .15s, color .15s;
+            }
+            #${ID} .om-more:hover { border-color:var(--accent); color:var(--accent); }
             #${ID} .om-diag-foot { text-align:center; color:var(--faint); font-size:11px; padding-top:4px; }
 
             /* 플로팅 패널 (네이버 폴백 · 유튜브 · Bing 폴백) — 위젯이 종이 패널 위에 얹힘 */
@@ -1386,14 +1432,76 @@
         );
     }
 
+    // ---------- 검색 결과 캐시 (v1.6.0) ----------
+    // 뒤로가기로 같은 검색어에 돌아오면 저장해 둔 결과를 즉시 렌더하고(빈 화면 제거),
+    // 네트워크 재검색은 그대로 진행해 완료되면 덮어쓴다 (stale-while-revalidate).
+    // sessionStorage = 탭·도메인 단위, 탭을 닫으면 자동 소멸 — TTL·용량 부담 최소.
+    const CACHE_PREFIX = "om_sr__1__"; // 스키마 버전 포함 — 항목 구조가 바뀌면 번호를 올린다
+    const CACHE_TTL = 5 * 60 * 1000;
+    const CACHE_MAX = 12;
+    const cacheKey = (q) => CACHE_PREFIX + ENGINE.key + "__" + parsePorts().map((p) => p.port).join(",") + "__" + q;
+    function readCache(q) {
+        try {
+            const raw = sessionStorage.getItem(cacheKey(q));
+            if (!raw) return null;
+            const d = JSON.parse(raw);
+            if (!d || !Array.isArray(d.raw) || Date.now() - d.t > CACHE_TTL) { sessionStorage.removeItem(cacheKey(q)); return null; }
+            return d;
+        } catch (e) { return null; }
+    }
+    function pruneCache() {
+        const entries = [];
+        for (let i = sessionStorage.length - 1; i >= 0; i--) {
+            const k = sessionStorage.key(i);
+            if (!k || !k.startsWith("om_sr__")) continue;
+            try {
+                const d = JSON.parse(sessionStorage.getItem(k));
+                if (!k.startsWith(CACHE_PREFIX) || !d || Date.now() - d.t > CACHE_TTL) { sessionStorage.removeItem(k); continue; }
+                entries.push([k, d.t]);
+            } catch (e) { sessionStorage.removeItem(k); }
+        }
+        entries.sort((a, b) => a[1] - b[1]); // 오래된 순
+        while (entries.length >= CACHE_MAX) sessionStorage.removeItem(entries.shift()[0]);
+    }
+    function writeCache(q) {
+        try {
+            const raw = state.raw.map((r) => { const { _note, ...rest } = r; return rest; }); // 노트 전문은 용량 폭탄 — 제외
+            pruneCache();
+            sessionStorage.setItem(cacheKey(q), JSON.stringify({ t: Date.now(), raw, firstVault: state.firstVault, vaultsSeen: state.vaultsSeen }));
+        } catch (e) {
+            // quota 초과 등 — 캐시는 편의 기능이라 전부 비우고 조용히 넘어간다
+            try { for (let i = sessionStorage.length - 1; i >= 0; i--) { const k = sessionStorage.key(i); if (k && k.startsWith("om_sr__")) sessionStorage.removeItem(k); } } catch (e2) { /* ignore */ }
+        }
+    }
+
     function runSearch() {
         const query = effectiveQuery();
         if (!query) return;
-        showLoading();
+        resetLimit();
         // 성경구절 인식: 쿼리에 구절 참조가 있으면 구절 노트명 형식(요3_16)의 보조 쿼리를 함께 던진다.
         // → 구절 노트 자체 + frontmatter 성경구절/본문에 그 구절을 인용한 설교·설교조각이 같이 잡힘.
         state.bibleRef = S.bibleEnabled ? parseBibleRef(baseQuery(), S.bibleNoteFormat) : null;
+        // 캐시 히트면 즉시 렌더 (검색 중… 화면 생략), 네트워크 재검색은 그대로 진행
+        const cached = readCache(query);
+        let fromCache = false;
+        if (cached) {
+            state.raw = cached.raw;
+            state.firstVault = cached.firstVault || "";
+            state.vaultsSeen = cached.vaultsSeen || 0;
+            applyPipeline(); renderResults();
+            fromCache = true;
+        } else {
+            showLoading();
+        }
         const auxQueries = state.bibleRef ? state.bibleRef.auxQueries.slice(0, 5) : [];
+        // 콜론형 보조 쿼리 (v1.6.0): 주석·설교 본문의 "요1:1" 표기 인용까지 회수.
+        // 인용 찾기 버튼(refine="요1_1")처럼 원 쿼리가 노트명 형식일 때 특히 유효. 범위 구절은
+        // 첫 절만 ("요1:1-3" 표기도 "요1:1"을 접두로 포함 — recall 충분, fanout 억제).
+        // 파서(테스트가 auxQueries를 정확 단언)는 불변 — 여기서만 확장한다.
+        if (state.bibleRef && state.bibleRef.verse != null) {
+            const colon = state.bibleRef.abbr + state.bibleRef.chapter + ":" + state.bibleRef.verse;
+            if (!auxQueries.includes(colon) && baseQuery().replace(/\s+/g, "") !== colon) auxQueries.push(colon);
+        }
         const ports = parsePorts();
         const mains = ports.map((p) => fetchPort(p.port, query));
         const auxJobs = [];
@@ -1403,6 +1511,8 @@
         const pinnedJob = resolveVerseNotes();
         Promise.all([Promise.all(mains), Promise.all(auxJobs)]).then(([responses, auxResults]) => {
             if (responses.every((r) => r === null)) {
+                // 캐시로 이미 그려 놨으면 에러 화면으로 덮지 않는다 (SWR — 낡은 결과가 빈 화면보다 낫다)
+                if (fromCache) { console.warn("[A4P Omnisearch] 재검색 실패 — 캐시 결과 유지"); return; }
                 showConnError(ports);
                 return;
             }
@@ -1439,7 +1549,11 @@
             state.vaultsSeen = new Set(merged.map((r) => r._label || r.vault)).size;
             applyPipeline();
             renderResults();
-            pinnedJob.then(mergePinned); // 구절 노트가 찾아지면 결과 맨 위에 핀
+            writeCache(query);
+            pinnedJob.then((p) => { // 구절 노트가 찾아지면 결과 맨 위에 핀 + 핀 포함 스냅샷 재저장
+                mergePinned(p);
+                if (p && p.length) writeCache(query);
+            });
         });
     }
 
@@ -1460,6 +1574,16 @@
             const before = v.length;
             v = v.filter((r) => matchType(r.path, state.type));
             hiddenInvisible += before - v.length;
+        }
+
+        // 칩 건수 배지 (v1.6.0): "그 칩을 눌렀을 때 보게 될 건수" = cat 필터만 빼고 나머지(제외·타입·minRel) 적용.
+        // minRel은 파이프라인상 뒤에 오지만 항목별 독립 술어라 교집합 카운트는 순서 무관.
+        const minRelOk = (r) => state.minRel <= 0 || (r._rel || 0) * 100 >= state.minRel;
+        state.catCounts = { all: v.filter(minRelOk).length };
+        for (const [k] of CATS) {
+            if (k === "all") continue;
+            const kws = S.catKeywords[k] || [];
+            state.catCounts[k] = kws.length ? v.filter((r) => minRelOk(r) && dirMatches(r.path, kws)).length : state.catCounts.all;
         }
 
         // 목회 카테고리 필터: 노트의 "폴더 경로"에 카테고리 키워드가 포함되면 통과 (키워드는 설정에서 변경 가능)
@@ -1519,9 +1643,14 @@
         } else {
             v.sort((a, b) => (Number(b.score) || 0) - (Number(a.score) || 0));
         }
-        state.view = v.slice(0, S.nbResults);
+        state.filteredCount = v.length;
+        state.view = v.slice(0, state.limit || S.nbResults);
         state.selected = -1;
     }
+
+    // "더 보기" 상한 리셋 — 결과 집합이 바뀌는 제스처(새 검색·칩·타입·관련도 변경)에서 호출.
+    // 정렬 변경은 같은 집합의 재배열이라 리셋하지 않는다.
+    const resetLimit = () => { state.limit = S.nbResults; };
 
     // ---------- rendering ----------
     function $body() { return $(`#${ID} .om-body`); }
@@ -1568,7 +1697,7 @@
                     </div>
                     <div class="om-bible"></div>
                     <div class="om-cats">${CATS.map(([k, label]) =>
-                        `<button class="om-cat${k === "all" ? " active" : ""}" data-v="${k}">${label}</button>`).join("")}</div>
+                        `<button class="om-cat${k === "all" ? " active" : ""}" data-v="${k}">${label}<span class="om-cat-n"></span></button>`).join("")}</div>
                     <div class="om-list"></div>
                 </div>
             </div>
@@ -1660,14 +1789,23 @@
             state.type = $(this).data("v");
             $(this).addClass("active").siblings().removeClass("active");
             setVal("om_type", state.type);
+            resetLimit();
             applyPipeline(); renderResults();
         });
 
-        // 목회 카테고리 칩 (설교/조각/묵상/성경/주석)
+        // 목회 카테고리 칩 (설교/조각/묵상/성경/자료)
         $(document).on("click", `#${ID} .om-cats button`, function () {
             state.cat = $(this).data("v");
             $(this).addClass("active").siblings().removeClass("active");
             setVal("om_cat", state.cat);
+            resetLimit();
+            applyPipeline(); renderResults();
+        });
+
+        // 더 보기: state.raw에 전체 결과가 있으므로 재요청 없이 표시 상한만 늘린다
+        $(document).on("click", `#${ID} .om-more`, (e) => {
+            e.preventDefault();
+            state.limit = (state.limit || S.nbResults) + S.nbResults;
             applyPipeline(); renderResults();
         });
 
@@ -1679,6 +1817,7 @@
             e.preventDefault();
             state.cat = "all"; setVal("om_cat", "all");
             $(`#${ID} .om-cats .om-cat`).removeClass("active").filter(`[data-v="all"]`).addClass("active");
+            resetLimit();
             applyPipeline();
             renderResults();
         });
@@ -1690,6 +1829,7 @@
             $(`#${ID} .om-minrel`).val(0);
             $(`#${ID} .om-minrel-val`).text("0%");
             $(`#${ID} .om-type button`).removeClass("active").filter(`[data-v="all"]`).addClass("active");
+            resetLimit();
             applyPipeline();
             renderResults();
         });
@@ -1707,11 +1847,21 @@
         $(document).on("click", `#${ID} .om-verse`, function (e) {
             e.preventDefault(); e.stopPropagation(); openNoteByName($(this).data("note"));
         });
+        // doctrine 칩 클릭 → 그 신학 주제로 재검색 (칩이 <a class="om-link"> 내부라 전파 차단 필수)
+        $(document).on("click", `#${ID} .om-doc`, function (e) {
+            e.preventDefault(); e.stopPropagation();
+            const q = String($(this).data("q") || "");
+            if (!q) return;
+            state.refine = q;
+            $(`#${ID} .om-refine`).val(q);
+            runSearch();
+        });
 
         $(document).on("input", `#${ID} .om-minrel`, function () {
             state.minRel = parseInt(this.value, 10) || 0;
             $(`#${ID} .om-minrel-val`).text(state.minRel + "%");
             setVal("om_minRel", state.minRel);
+            resetLimit();
             applyPipeline(); renderResults();
         });
 
@@ -1722,10 +1872,11 @@
         $(document).on("input", `#${ID} .om-refine`, onRefine);
 
         // open the note: Local REST (reliable) → else obsidian:// deeplink. Allow modified/middle clicks.
+        // 인덱스는 .om-result 집합 기준 — 형제 기준 .index()는 .om-filter-hint/.om-more가 끼면 어긋난다.
         $(document).on("click", `#${ID} .om-link`, function (e) {
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
             e.preventDefault();
-            openItem(state.view[$(this).closest(".om-result").index()]);
+            openItem(state.view[$(`#${ID} .om-result`).index($(this).closest(".om-result"))]);
         });
 
         // expand excerpt on click (don't trigger the open handler)
@@ -1738,7 +1889,7 @@
         $(document).on("click", `#${ID} .om-act`, function (e) {
             e.preventDefault(); e.stopPropagation();
             const card = $(this).closest(".om-result");
-            const item = state.view[card.index()];
+            const item = state.view[$(`#${ID} .om-result`).index(card)];
             if (!item) return;
             const a = $(this).data("a");
             if (a === "name") copyText(item.basename);
@@ -1785,10 +1936,23 @@
         else el.text(`${n}건`).show();
     }
 
+    // 카테고리 칩 건수 배지 갱신 (v1.6.0) — 칩 DOM은 buildShell 1회 렌더라 배지만 따로 업데이트.
+    function renderCatCounts() {
+        const counts = state.catCounts;
+        if (!counts) return;
+        $(`#${ID} .om-cats .om-cat`).each(function () {
+            const k = $(this).data("v");
+            const n = counts[k];
+            $(this).find(".om-cat-n").text(n != null ? n : "");
+            $(this).toggleClass("om-cat-zero", n === 0);
+        });
+    }
+
     function renderResults() {
         const list = $(`#${ID} .om-list`);
         list.empty();
         setCount(state.view.length);
+        renderCatCounts();
         renderBibleCard();
 
         // 접힌 패널의 필터가 결과를 숨기고 있으면 알리고 원클릭 해제 제공
@@ -1840,6 +2004,10 @@
             }
             const pathHtml = S.showPath ? `<div class="om-path">${breadcrumb(item.path)}</div>` : "";
             const vcStyle = colorize ? ` style="--vc:${escapeHtml(vc)}"` : "";
+            // 설교 파일명(260412_대_…)이면 날짜·부서 배지 + prefix 없는 제목으로 표시 (원본 basename은 불변)
+            const sm = sermonMeta(item.basename);
+            const dispTitle = sm ? sm.title : item.basename;
+            const sermonBadge = sm ? `<span class="om-sermon-badge">${sm.date} · ${sm.dept}</span>` : "";
             const card = $(`
                 <div class="om-result"${vcStyle}>
                     <div class="om-actions">
@@ -1849,7 +2017,7 @@
                         <button class="om-act" data-a="abs" title="절대경로 복사">abs</button>
                     </div>
                     <a class="om-link" href="${escapeHtml(url)}">
-                        <h3 class="om-title"><span class="om-title-text">${escapeHtml(item.basename)}</span>${badge}</h3>
+                        <h3 class="om-title"><span class="om-title-text">${escapeHtml(dispTitle)}</span>${sermonBadge}${badge}</h3>
                         ${scoreHtml}
                         <div class="om-excerpt" style="-webkit-line-clamp:${S.excerptLines}">${cleanExcerpt(item.excerpt)}</div>
                         ${termsHtml}
@@ -1860,6 +2028,10 @@
             `);
             list.append(card);
         });
+
+        // 더 보기 (v1.6.0): state.raw에 전체 결과가 있으므로 표시 상한만 늘리면 된다
+        const remain = state.filteredCount - state.view.length;
+        if (remain > 0) list.append(`<button class="om-more">더 보기 (+${Math.min(remain, S.nbResults)}건 · 남은 ${remain}건)</button>`);
 
         enrichResults(); // Local REST API: swap in real body + tags (no-op unless enabled)
     }

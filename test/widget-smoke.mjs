@@ -1,4 +1,4 @@
-// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 105케이스
+// A4P Omnisearch 위젯 스모크 테스트 (jsdom) — 131케이스
 // 실행 준비: npm install   (레포 루트에서 — devDependencies: jsdom, jquery)
 // 실행:      npm test  (파서 테스트 포함)  또는  node test/widget-smoke.mjs
 // 검증 범위: 4개 엔진 마운트 위치, 에디토리얼 스킨/테마 클래스, 카테고리 칩,
@@ -8,6 +8,8 @@
 //            refOnly 그룹 정렬·응답별 정규화, 카테고리 디렉토리 매칭, 진단 볼트 불일치·버전 표시.
 // v1.5.0 추가: 주석 칩 제거·기본 제외(디렉토리 매칭), '자료' 칩, 다양성 정렬(교차 배치),
 //            설정 코드 cats.ref, om_cat 잔존값 마이그레이션.
+// v1.6.0 추가: 칩 건수 배지, 더 보기, 설교 파일명 배지, doctrine 재검색, 콜론형 인용 병행,
+//            검색 결과 캐시(SWR), .om-result 인덱스 정합, enrich _note 캐시.
 import { JSDOM } from "jsdom";
 import fs from "fs";
 import { createRequire } from "module";
@@ -136,11 +138,15 @@ async function makeEnv(opts = {}) {
         if (/raw\.githubusercontent\.com/.test(o.url)) {
           o.onload({ status: 200, responseText: opts.latestVersion ? `// @version      ${opts.latestVersion}\n` : "", response: "" });
         } else {
-          o.onload({ status: 200, response: opts.respond ? opts.respond(o.url) : FAKE_RESULTS });
+          const r = opts.respond ? opts.respond(o.url) : FAKE_RESULTS;
+          if (r === "__ERR__") { o.onerror && o.onerror(); return; } // 포트 다운(볼트 닫힘) 시뮬레이션
+          o.onload({ status: 200, response: r });
         }
       }, 0);
     },
   };
+  // v1.6.0 검색 결과 캐시 테스트용 sessionStorage seed (스크립트 실행 전에 주입)
+  for (const [k, v] of Object.entries(opts.session || {})) window.sessionStorage.setItem(k, v);
   window.GM_getValue = (k, d) => (k in gmStore ? gmStore[k] : d);
   window.GM_setValue = (k, v) => { gmStore[k] = v; };
   window.TextDecoder = TextDecoder; // jsdom 창에 없을 수 있어 Node 전역 주입
@@ -440,6 +446,180 @@ console.log("\n[v1.5.0] om_cat 잔존값('comm') 마이그레이션");
   const env = await makeEnv({ q: "설교", respond: () => resp, gmStore: { om_cat: "comm" } });
   check("사라진 칩 저장값 → 전체 탭 복귀 (결과 표시)", env.$(`#OmnisearchObsidianResults .om-result`).length === 1);
   check("마이그레이션이 GM 저장소에 반영 (om_cat=all)", (await env.window.GM.getValue("om_cat", "")) === "all");
+}
+
+// ================================================================
+// v1.6.0 신규 케이스: 칩 건수 배지, 더 보기, 설교 파일명 배지, doctrine 재검색,
+// 콜론형 인용 병행, 검색 결과 캐시(SWR), .om-result 인덱스 정합
+// ================================================================
+
+console.log("\n[v1.6.0] 카테고리 칩 건수 배지");
+{
+  const resp = JSON.stringify([
+    { score: 30, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+    { score: 20, vault: "csh_remote", path: "300. Sermons/설교B.md", basename: "설교B", excerpt: "…" },
+    { score: 10, vault: "csh_remote", path: "700. Reference/자료1.md", basename: "자료1", excerpt: "…" },
+  ]);
+  const env = await makeEnv({ q: "사랑", respond: () => resp });
+  const n = (k) => env.$(`#OmnisearchObsidianResults .om-cat[data-v="${k}"] .om-cat-n`).text();
+  check("전체 칩 배지 = 3", n("all") === "3");
+  check("설교 칩 배지 = 2", n("sermon") === "2");
+  check("자료 칩 배지 = 1", n("ref") === "1");
+  check("0건 칩(묵상) 흐림 클래스", env.$(`#OmnisearchObsidianResults .om-cat[data-v="devo"]`).hasClass("om-cat-zero"));
+  env.$(`#OmnisearchObsidianResults .om-cat[data-v="devo"]`).trigger("click");
+  check("0건 칩도 클릭 가능 (빈 카테고리 힌트)", env.$(`#OmnisearchObsidianResults .om-cat-reset`).length === 1);
+}
+
+console.log("\n[v1.6.0] 더 보기 버튼");
+{
+  const items = [];
+  for (let i = 1; i <= 15; i++) items.push({ score: 100 - i, vault: "csh_remote", path: `300. Sermons/설교${i}.md`, basename: `설교${i}`, excerpt: "…" });
+  const resp = JSON.stringify(items);
+  const env = await makeEnv({ q: "설교", respond: () => resp });
+  const cards = () => env.$(`#OmnisearchObsidianResults .om-result`).length;
+  check("기본 10건 표시", cards() === 10);
+  const more = env.$(`#OmnisearchObsidianResults .om-more`);
+  check("더 보기 버튼 (+5건)", more.length === 1 && more.text().includes("+5건"));
+  more.trigger("click");
+  check("더 보기 클릭 → 15건 전체 + 버튼 소멸", cards() === 15 && env.$(`#OmnisearchObsidianResults .om-more`).length === 0);
+  env.$(`#OmnisearchObsidianResults .om-cat[data-v="sermon"]`).trigger("click");
+  check("칩 변경 → 표시 상한 리셋 (10건)", cards() === 10);
+}
+
+console.log("\n[v1.6.0] .om-result 인덱스 정합 (필터 힌트가 끼어도 올바른 노트)");
+{
+  const resp = JSON.stringify([
+    { score: 100, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+    { score: 40, vault: "csh_remote", path: "300. Sermons/설교B.md", basename: "설교B", excerpt: "…" },
+  ]);
+  // minRel 50 → 설교B 숨김 + .om-filter-hint가 리스트 맨 앞에 삽입되는 상황
+  const env = await makeEnv({ q: "설교", respond: () => resp, gmStore: { om_minRel: 50 } });
+  check("필터 힌트 존재 (전제)", env.$(`#OmnisearchObsidianResults .om-filter-hint`).length === 1);
+  let copied = "";
+  Object.defineProperty(env.window.navigator, "clipboard", {
+    value: { writeText: (t) => { copied = t; return Promise.resolve(); } }, configurable: true,
+  });
+  env.$(`#OmnisearchObsidianResults .om-result`).first().find(`.om-act[data-a="name"]`).trigger("click");
+  check("힌트가 끼어도 첫 카드 = 설교A 복사 (구버전은 어긋남)", copied === "설교A");
+}
+
+console.log("\n[v1.6.0] 설교 파일명 배지 (날짜·부서)");
+{
+  const resp = JSON.stringify([
+    { score: 30, vault: "csh_remote", path: "300. Sermons/330. 대예배/260412_대_부활 설교 구조화_고전15.md", basename: "260412_대_부활 설교 구조화_고전15", excerpt: "…" },
+    { score: 20, vault: "csh_remote", path: "300. Sermons/991301_대_이상한.md", basename: "991301_대_이상한", excerpt: "…" },
+    { score: 10, vault: "csh_remote", path: "300. Sermons/하나님의 사랑.md", basename: "하나님의 사랑", excerpt: "…" },
+  ]);
+  const env = await makeEnv({ q: "설교", respond: () => resp });
+  const first = env.$(`#OmnisearchObsidianResults .om-result`).first();
+  check("배지 = 2026-04-12 · 대예배", first.find(".om-sermon-badge").text() === "2026-04-12 · 대예배");
+  check("표시 제목에서 prefix 제거", first.find(".om-title-text").text() === "부활 설교 구조화_고전15");
+  check("잘못된 날짜(13월)·일반 노트는 배지 없음", env.$(`#OmnisearchObsidianResults .om-sermon-badge`).length === 1);
+}
+
+console.log("\n[v1.6.0] doctrine 칩 클릭 → 재검색");
+{
+  const resp = JSON.stringify([
+    { score: 10, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+  ]);
+  const respond = (u) => {
+    if (decodeURIComponent(u).includes("/vault/"))
+      return JSON.stringify({ content: "본문", frontmatter: { doctrine: ["[[🔖 기독론]]"] } });
+    return resp;
+  };
+  const env = await makeEnv({
+    q: "설교", respond,
+    gmValues: { v1_port: "51361", v1_vault: "csh_remote", v1_lrPort: "27123", v1_lrKey: "k", useLocalRest: true },
+  });
+  await new Promise((r) => setTimeout(r, 200)); // enrich 완료 대기
+  const chip = env.$(`#OmnisearchObsidianResults .om-doc`);
+  check("doctrine 칩이 클릭 가능한 button + data-q", chip.is("button") && chip.data("q") === "기독론");
+  chip.trigger("click");
+  await new Promise((r) => setTimeout(r, 100));
+  check("클릭 → 재검색 입력창에 주제 반영", env.$(`#OmnisearchObsidianResults .om-refine`).val() === "기독론");
+  check("클릭 → 그 주제로 검색 요청", env.calls.xhrUrls.some((u) => decodeURIComponent(u).includes("q=기독론")));
+}
+
+console.log("\n[v1.6.0] enrich _note 캐시 (재렌더 시 REST 재요청 없음)");
+{
+  const resp = JSON.stringify([
+    { score: 10, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+  ]);
+  const respond = (u) => (decodeURIComponent(u).includes("/vault/") ? JSON.stringify({ content: "본문" }) : resp);
+  const env = await makeEnv({
+    q: "설교", respond,
+    gmValues: { v1_port: "51361", v1_vault: "csh_remote", v1_lrPort: "27123", v1_lrKey: "k", useLocalRest: true },
+  });
+  await new Promise((r) => setTimeout(r, 200));
+  const vaultCalls = () => env.calls.xhrUrls.filter((u) => u.includes("/vault/")).length;
+  const n1 = vaultCalls();
+  env.$(`#OmnisearchObsidianResults .om-cat[data-v="sermon"]`).trigger("click"); // 재렌더
+  await new Promise((r) => setTimeout(r, 150));
+  check("칩 클릭 재렌더 후 /vault/ 요청 불증가", n1 >= 1 && vaultCalls() === n1);
+}
+
+console.log("\n[v1.6.0] 인용 찾기 — 콜론형(요1:1) 병행 검색");
+{
+  const mainResp = JSON.stringify([
+    { score: 50, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+  ]);
+  const colonResp = JSON.stringify([
+    { score: 30, vault: "csh_remote", path: "300. Sermons/콜론표기 설교.md", basename: "콜론표기 설교", excerpt: "요1:1 말씀은…" },
+  ]);
+  const respond = (u) => {
+    const q = decodeURIComponent(u);
+    if (q.includes("q=요1:1")) return colonResp;
+    return mainResp;
+  };
+  const env = await makeEnv({ q: "요 1:1", respond });
+  env.$(`#OmnisearchObsidianResults .om-bible-cite`).trigger("click"); // refine = "요1_1"
+  await new Promise((r) => setTimeout(r, 400));
+  const urls = env.calls.xhrUrls.map(decodeURIComponent);
+  check("인용 찾기 → 노트명(요1_1) 검색", urls.some((u) => u.includes("q=요1_1")));
+  check("인용 찾기 → 콜론형(요1:1) 보조 검색", urls.some((u) => u.includes("q=요1:1")));
+  const titles = env.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env.$(el).find(".om-title-text").text()).get();
+  check("콜론 표기 인용 노트가 결과에 병합", titles.includes("콜론표기 설교"));
+}
+
+console.log("\n[v1.6.0] 검색 결과 캐시 (sessionStorage, stale-while-revalidate)");
+{
+  // (a) 검색 후 캐시 저장
+  const env = await makeEnv({ q: "사랑" });
+  const keys = [];
+  for (let i = 0; i < env.window.sessionStorage.length; i++) keys.push(env.window.sessionStorage.key(i));
+  const ck = keys.find((k) => k.startsWith("om_sr__1__google__"));
+  check("검색 후 캐시 키 저장", !!ck && env.window.sessionStorage.getItem(ck).includes("하나님의 사랑"));
+
+  // (b) 신선한 캐시 + 전 포트 다운 → 캐시 결과 즉시 표시, 에러 화면 없음
+  const cacheVal = JSON.stringify({
+    t: Date.now(),
+    raw: [{ score: 10, vault: "csh_remote", path: "300. Sermons/캐시된 설교.md", basename: "캐시된 설교", excerpt: "…", _rel: 1 }],
+    firstVault: "csh_remote", vaultsSeen: 1,
+  });
+  const env2 = await makeEnv({
+    q: "사랑", respond: () => "__ERR__",
+    session: { "om_sr__1__google__51361__사랑": cacheVal },
+  });
+  const titles2 = env2.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env2.$(el).find(".om-title-text").text()).get();
+  check("포트 다운이어도 캐시 결과 표시", titles2.length === 1 && titles2[0] === "캐시된 설교");
+  check("캐시 표시 중엔 연결 에러 화면 미표시", env2.$(`#OmnisearchObsidianResults .om-error`).length === 0);
+
+  // (c) 만료된 캐시(10분 전) → 미사용, 포트 다운이면 기존 에러 화면
+  const staleVal = JSON.stringify({ t: Date.now() - 10 * 60 * 1000, raw: [{ score: 1, vault: "v", path: "x.md", basename: "낡은 결과", excerpt: "" }], firstVault: "", vaultsSeen: 1 });
+  const env3 = await makeEnv({
+    q: "사랑", respond: () => "__ERR__",
+    session: { "om_sr__1__google__51361__사랑": staleVal },
+  });
+  check("만료 캐시 미사용 → 연결 에러 화면", env3.$(`#OmnisearchObsidianResults .om-error`).length === 1 &&
+    env3.$(`#OmnisearchObsidianResults .om-result`).length === 0);
+
+  // (d) 정상 검색이 캐시를 덮어씀 (SWR 갱신)
+  const env4 = await makeEnv({
+    q: "사랑",
+    session: { "om_sr__1__google__51361__사랑": cacheVal }, // 캐시된 설교
+  });
+  const titles4 = env4.$(`#OmnisearchObsidianResults .om-result`).map((i, el) => env4.$(el).find(".om-title-text").text()).get();
+  check("재검색 완료 → 신선한 결과로 덮어씀", titles4.includes("하나님의 사랑") && !titles4.includes("캐시된 설교"));
 }
 
 console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
