@@ -128,8 +128,10 @@ async function makeEnv(opts = {}) {
   const dom = new JSDOM(`<!doctype html><html><head></head><body><div id="rcnt"><div id="rhs"></div></div></body></html>`,
     { url, runScripts: "outside-only", pretendToBeVisual: true });
   const { window } = dom;
-  const calls = { xhrUrls: [], sets: [], saves: 0, order: [], confirms: 0, lastAlert: "" };
+  const calls = { xhrUrls: [], navUrls: [], sets: [], saves: 0, order: [], confirms: 0, lastAlert: "" };
   const gmStore = Object.assign({}, opts.gmStore || {});
+  // obsidian:// 딥링크 관측 심 (jsdom은 location.href 이동 미구현 — 위젯의 goObsidian이 이걸 우선 호출)
+  window.__omNav = (u) => calls.navUrls.push(u);
   window.GM = {
     getValue: (k, d) => Promise.resolve(k in gmStore ? gmStore[k] : d),
     setValue: (k, v) => { gmStore[k] = v; },
@@ -523,6 +525,37 @@ console.log("\n[v1.6.1] 글자 크기 배율 (기본 110%, 설정 가능)");
   check("설정 130% → --fs: 1.3", styleOf(env2).includes("--fs: 1.3;"));
   const env3 = await makeEnv({ q: "사랑", gmValues: { fontScale: 999 } });
   check("범위 밖 값은 150%로 클램프", styleOf(env3).includes("--fs: 1.5;"));
+}
+
+console.log("\n[v1.6.2] 노트 열기 시 옵시디언 창 활성화 (REST 성공 → vault-only 딥링크)");
+{
+  const resp = JSON.stringify([
+    { score: 100, vault: "csh_remote", path: "300. Sermons/설교A.md", basename: "설교A", excerpt: "…" },
+  ]);
+  const restVaults = { v1_port: "51361", v1_vault: "csh_remote", v1_lrPort: "27123", v1_lrKey: "k", useLocalRest: true };
+  const respond = (u) => (decodeURIComponent(u).includes("/vault/") || u.includes("/open/") ? JSON.stringify({ content: "" }) : resp);
+  const clickFirst = (env) => env.$(`#OmnisearchObsidianResults .om-result`).first().find(".om-link")
+    .trigger(env.$.Event("click", { button: 0 }));
+
+  const env = await makeEnv({ q: "설교", respond, gmValues: restVaults });
+  clickFirst(env);
+  await new Promise((r) => setTimeout(r, 100));
+  check("REST /open/ 발사 (기존 열기 경로 유지)", env.calls.xhrUrls.filter((u) => u.includes("/open/")).length === 1);
+  check("성공 후 vault-only 포커스 딥링크 1회 (file 없음)",
+    env.calls.navUrls.length === 1 && env.calls.navUrls[0] === "obsidian://open?vault=csh_remote");
+
+  const env2 = await makeEnv({ q: "설교", respond, gmValues: Object.assign({ focusOnOpen: false }, restVaults) });
+  clickFirst(env2);
+  await new Promise((r) => setTimeout(r, 100));
+  check("focusOnOpen=false → REST만, 딥링크 없음",
+    env2.calls.xhrUrls.filter((u) => u.includes("/open/")).length === 1 && env2.calls.navUrls.length === 0);
+
+  const respondDown = (u) => (u.includes("/open/") ? "__ERR__" : (decodeURIComponent(u).includes("/vault/") ? JSON.stringify({ content: "" }) : resp));
+  const env3 = await makeEnv({ q: "설교", respond: respondDown, gmValues: restVaults });
+  clickFirst(env3);
+  await new Promise((r) => setTimeout(r, 100));
+  check("REST 실패 → 전체 딥링크(file 포함) 폴백 1회, vault-only 중복 없음",
+    env3.calls.navUrls.length === 1 && env3.calls.navUrls[0].includes("file=") && decodeURIComponent(env3.calls.navUrls[0]).includes("설교A"));
 }
 
 console.log("\n[v1.6.0] 설교 파일명 배지 (날짜·부서)");

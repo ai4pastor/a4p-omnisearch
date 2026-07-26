@@ -1,8 +1,15 @@
 # RESUME — 다음 세션 이어가기
 
-> 마지막 갱신: 2026-07-12 (세션 6 — v1.5.0 검색체계 개편 + v1.6.0 고도화 6종 + v1.6.1 UI 피드백)
+> 마지막 갱신: 2026-07-26 (세션 7 — v1.6.2 노트 열기 시 옵시디언 창 활성화)
 
-## 최신: v1.6.1 — 실기기 피드백 2건 (유저스크립트만, raw 푸시 배포 — 릴리스는 다음 플러그인 변경 때 통일)
+## 최신: v1.6.2 — 노트 클릭 시 옵시디언 창 포그라운드 전환 (유저스크립트만, raw 푸시 배포)
+
+- **문제**: 카드 클릭이 Local REST `POST /open/`으로 노트를 열어(백그라운드 XHR) 노트는 바뀌지만 **옵시디언 창이 화면 앞으로 안 올라옴** (성경구절 칩은 딥링크라 올라오는 비대칭). 온보딩 시 `useLocalRest` 자동 on이라 모든 정상 설치 사용자가 해당.
+- **해법**: REST 성공(status<300) 후 **vault-only 딥링크** `obsidian://open?vault=<볼트>`(file 없음 = 열린 노트 안 바꾸고 창만 활성화) 발사. REST 실패 폴백(전체 딥링크)이 이미 활성화를 겸하므로 클릭당 딥링크 정확히 1회.
+- 구현: `goObsidian(url)` 네비 헬퍼(테스트 심 `window.__omNav`) + `focusUrl(item)` 신설, 모든 딥링크 지점(openItem/openViaRest 폴백/openNoteByName) 헬퍼로 통일. 설정 `focusOnOpen`(체크박스, **기본 true**). 브라우저 "Obsidian 열기" 확인창은 "항상 허용" 한 번이면 끝(설치가이드 FAQ 갱신).
+- 검증: 파서 25/25 · 스모크 **140/140**(v1.6.2 케이스 4건: REST+포커스 딥링크/focusOnOpen off/REST 다운 폴백 중복 없음, makeEnv에 `calls.navUrls` 관측 추가).
+
+## 이전: v1.6.1 — 실기기 피드백 2건 (유저스크립트만, raw 푸시 배포 — 릴리스는 다음 플러그인 변경 때 통일)
 
 - **카드 호버 복사 버튼(인용/name/rel/abs) 제거** — 설교 날짜 배지·태그를 가리고 실사용 없음(사용자 스크린샷 피드백). 복사는 키보드 `y`(위키링크)/`c`(인용)로 유지. `copyCitation`/`absPath` 함수는 키보드·설정 연계로 존치.
 - **글자 크기 설정** — 구글 검색결과 대비 너무 작다는 피드백. 위젯 CSS의 font-size 28곳을 `calc(Xpx * var(--fs, 1))`로 일괄 변환(설정 대화상자 CONFIG_CSS는 제외), 루트에 `--fs` 주입. 설정 `fontScale`(int %, **기본 110** = 10% 확대, 80~150 클램프).
@@ -87,6 +94,6 @@
 ## 검증 스위트
 
 - `node --check userscript/a4p-omnisearch.user.js` + `node test/bible-parser.test.mjs` (25/25)
-- `npm test` — 위젯 스모크 136/136 (jsdom, 멀티볼트 온보딩·정렬·카테고리·진단·주석 제외·다양성 정렬·칩 배지·더 보기·캐시·글자 배율 케이스 포함)
+- `npm test` — 위젯 스모크 140/140 (jsdom, 멀티볼트 온보딩·정렬·카테고리·진단·주석 제외·다양성 정렬·칩 배지·더 보기·캐시·글자 배율·창 활성화 케이스 포함)
 - `cd obsidian-plugin && npm run build`
 - 배포 절차: 유저스크립트 = @version bump + push (자동 업데이트). 플러그인 = 버전 bump(manifest×2·package·versions.json) + build + **새 GitHub 릴리스** (BRAT).

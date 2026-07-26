@@ -5,7 +5,7 @@
 // @updateURL    https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js
 // @homepageURL  https://ai4pastor.com
 // @supportURL   https://github.com/ai4pastor/a4p-omnisearch/issues
-// @version      1.6.1
+// @version      1.6.2
 // @description  구글·네이버·Bing·유튜브 검색 결과 옆에 내 옵시디언 볼트를 함께 띄우는 목회자 통합검색. 성경구절 인식(요3:16 → 구절 노트 + 인용 설교·설교조각), 목회 카테고리 필터(설교/조각/묵상/성경/자료), 주석 노트 기본 제외, 카테고리 다양성 정렬, 신학 doctrine 칩, 인용 복사, 설정 코드 한 번 붙여넣기 온보딩, 연결 진단, 라이트/다크 수동 전환. Omnisearch HTTP + Local REST API 기반.
 // @author       A4P (abadcsh, ai4pastor.com)
 // @contributor  구요한 (CMDSPACE) — obsidian-omnisearch-google-cmds fork base
@@ -48,7 +48,7 @@
     document.documentElement.setAttribute("data-a4p-omnisearch", "1");
 
     const ID = "OmnisearchObsidianResults";
-    const VERSION = "1.6.1";
+    const VERSION = "1.6.2";
     const UPDATE_URL = "https://raw.githubusercontent.com/ai4pastor/a4p-omnisearch/main/userscript/a4p-omnisearch.user.js";
     const IMG_EXT = ["png", "jpg", "jpeg", "gif", "webp", "bmp", "svg", "avif"];
 
@@ -180,6 +180,18 @@
         return `obsidian://open?vault=${encodeURIComponent(v)}&file=${encodeURIComponent(file)}`;
     }
 
+    // Vault-only deeplink: activates (raises) that vault's window without changing the open note.
+    function focusUrl(item) {
+        const v = item._dvault || item.vault || "";
+        return `obsidian://open?vault=${encodeURIComponent(v)}`;
+    }
+
+    // Single choke point for obsidian:// navigations (tests observe via window.__omNav).
+    function goObsidian(url) {
+        if (window.__omNav) { window.__omNav(url); return; }
+        window.location.href = url;
+    }
+
     const hasRest = (item) => S.useLocalRest && item && item._restKey && lrBase(item._restPort);
 
     // Open directly via Local REST API (POST /open/{path}) — talks to that vault's own server,
@@ -195,11 +207,14 @@
             onload: (r) => {
                 if (r.status >= 300) {
                     console.warn("[Omnisearch CMDS] /open", r.status, "→ falling back to deeplink");
-                    window.location.href = openUrl(item);
+                    goObsidian(openUrl(item));
+                } else if (S.focusOnOpen) {
+                    // REST opened the note silently — raise the vault window so the user sees it.
+                    goObsidian(focusUrl(item));
                 }
             },
-            onerror: () => { window.location.href = openUrl(item); }, // fall back to obsidian://
-            ontimeout: () => { window.location.href = openUrl(item); },
+            onerror: () => { goObsidian(openUrl(item)); }, // fall back to obsidian://
+            ontimeout: () => { goObsidian(openUrl(item)); },
         });
     }
 
@@ -207,7 +222,7 @@
     function openItem(item) {
         if (!item) return;
         if (hasRest(item)) openViaRest(item);
-        else window.location.href = openUrl(item);
+        else goObsidian(openUrl(item));
     }
 
     const hexToRgb = (h) => {
@@ -609,9 +624,9 @@
     function openNoteByName(name) {
         if (!name) return;
         const v = state.firstVault || (S.vaults[0] && S.vaults[0].dvault) || "";
-        window.location.href = v
+        goObsidian(v
             ? `obsidian://open?vault=${encodeURIComponent(v)}&file=${encodeURIComponent(name)}`
-            : `obsidian://open?file=${encodeURIComponent(name)}`;
+            : `obsidian://open?file=${encodeURIComponent(name)}`);
     }
 
     // 설교문에 바로 붙일 수 있는 인용 형식: “발췌…” — [[노트명]]
@@ -1229,6 +1244,7 @@
             vaultsParentDir: { label: "Common parent folder of your vaults", type: "text", default: "", title: "볼트들의 공통 상위 폴더. 설정하면 abs 경로 = 부모/볼트명/상대경로 로 자동 조립." },
             useLocalRest: { label: "Use Local REST API for body + tags", type: "checkbox", default: false, title: "각 볼트의 Local REST API(HTTP)로 노트를 직접 읽어 frontmatter 제거한 본문 + 실제 태그 표시. 슬롯에 포트/키 입력 + 플러그인 설치 필요." },
             useAdvancedUri: { label: "Use Advanced URI for opening", type: "checkbox", default: false, title: "Advanced URI 플러그인으로 열기. 백그라운드 볼트의 노트도 안정적으로 열림(권장)." },
+            focusOnOpen: { label: "Bring Obsidian to front on open", type: "checkbox", default: true, title: "노트를 열 때 옵시디언 창을 화면 앞으로 가져옵니다. 브라우저가 'Obsidian을 열까요?'라고 물으면 '항상 허용'을 선택하세요." },
             keyboardNav: { label: "Keyboard navigation (j/k/Enter/y)", type: "checkbox", default: true, title: "결과 위에서 j/k·↑↓ 이동, Enter 열기, y 위키링크 복사." },
             showControlsDefault: { label: "Open live controls by default", type: "checkbox", default: false, title: "검색 시 라이브 필터 패널을 기본으로 펼침." },
             requestTimeout: { label: "Per-port timeout (ms)", type: "int", default: 5000, title: "각 포트(볼트) 요청 대기 시간(ms). 초과 시 그 볼트는 건너뜀." },
@@ -1270,6 +1286,7 @@
                     vaultsParentDir: "볼트들의 공통 상위 폴더. 설정하면 abs 경로 = 부모/볼트명/상대경로 로 자동 조립.",
                     useLocalRest: "각 볼트 Local REST API(HTTP)로 노트를 직접 읽어 본문+실제 태그 표시. 슬롯에 포트/키 입력 + 플러그인 필요.",
                     useAdvancedUri: "Advanced URI 플러그인으로 열기. 백그라운드 볼트의 노트도 안정적으로 열림(권장).",
+                    focusOnOpen: "노트를 열 때 옵시디언 창을 화면 앞으로 가져옵니다. 브라우저가 'Obsidian을 열까요?'라고 물으면 '항상 허용'을 선택하세요.",
                     keyboardNav: "결과 위에서 j/k·↑↓ 이동, Enter 열기, y 위키링크 복사.",
                     showControlsDefault: "검색 시 라이브 필터 패널을 기본으로 펼침.",
                     requestTimeout: "각 포트(볼트) 요청 대기 시간(ms). 초과 시 그 볼트는 건너뜀.",
@@ -1336,6 +1353,7 @@
         S.vaultsParentDir = String(gmc.get("vaultsParentDir") || "").trim();
         S.useLocalRest = !!gmc.get("useLocalRest");
         S.useAdvancedUri = !!gmc.get("useAdvancedUri");
+        S.focusOnOpen = gmc.get("focusOnOpen") !== false; // 기본 true (REST로 연 뒤 창 활성화 딥링크)
         S.keyboardNav = !!gmc.get("keyboardNav");
         S.showControlsDefault = !!gmc.get("showControlsDefault");
         S.requestTimeout = Math.max(500, parseInt(gmc.get("requestTimeout"), 10) || 5000);
