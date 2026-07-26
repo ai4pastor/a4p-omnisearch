@@ -8,6 +8,7 @@
 - **해법**: REST 성공(status<300) 후 **vault-only 딥링크** `obsidian://open?vault=<볼트>`(file 없음 = 열린 노트 안 바꾸고 창만 활성화) 발사. REST 실패 폴백(전체 딥링크)이 이미 활성화를 겸하므로 클릭당 딥링크 정확히 1회.
 - 구현: `goObsidian(url)` 네비 헬퍼(테스트 심 `window.__omNav`) + `focusUrl(item)` 신설, 모든 딥링크 지점(openItem/openViaRest 폴백/openNoteByName) 헬퍼로 통일. 설정 `focusOnOpen`(체크박스, **기본 true**). 브라우저 "Obsidian 열기" 확인창은 "항상 허용" 한 번이면 끝(설치가이드 FAQ 갱신).
 - 검증: 파서 25/25 · 스모크 **140/140**(v1.6.2 케이스 4건: REST+포커스 딥링크/focusOnOpen off/REST 다운 폴백 중복 없음, makeEnv에 `calls.navUrls` 관측 추가).
+- **실기기 확인 완료 (2026-07-26)**: 사용자가 구글 검색 → 카드 클릭 → 옵시디언 창 최상위 전환 + 해당 노트 열림 확인 ("잘 된다").
 
 ## 이전: v1.6.1 — 실기기 피드백 2건 (유저스크립트만, raw 푸시 배포 — 릴리스는 다음 플러그인 변경 때 통일)
 
